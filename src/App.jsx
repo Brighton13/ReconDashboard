@@ -1,0 +1,1702 @@
+import { useEffect, useMemo, useState } from 'react';
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
+const SESSION_STORAGE_KEY = 'recon-dashboard-session';
+const DAY_FILTERS = [7, 14, 30, 60];
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const MENU_ITEMS = [
+  { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
+  { key: 'sales', label: 'Sales', path: '/sales' },
+  { key: 'terminal-visibility', label: 'Terminal Visibility', path: '/terminal-visibility' },
+  { key: 'zra-compliance', label: 'ZRA Compliance', path: '/zra-compliance' },
+  { key: 'attention-queue', label: 'Attention Queue', path: '/attention-queue' },
+  { key: 'day-end-batches', label: 'Day End Batches', path: '/day-end-batches' },
+  { key: 'user-management', label: 'User Management', path: '/user-management' },
+];
+
+function formatNumber(value) {
+  return new Intl.NumberFormat('en-US').format(Number(value || 0));
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat('en-ZM', {
+    style: 'currency',
+    currency: 'ZMW',
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  return new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
+function formatShortDate(value) {
+  if (!value) {
+    return 'Not available';
+  }
+
+  return new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium',
+  }).format(new Date(value));
+}
+
+function titleizeDocumentType(value) {
+  return String(value || '')
+    .split(/[_\.]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function slugToTitle(value) {
+  return String(value || '')
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function statusTone(statusBucket) {
+  if (statusBucket === 'completed') {
+    return 'tone-green';
+  }
+
+  if (statusBucket === 'failed') {
+    return 'tone-red';
+  }
+
+  return 'tone-amber';
+}
+
+function complianceBucket(rate) {
+  if (rate >= 95) {
+    return 'completed';
+  }
+
+  if (rate >= 80) {
+    return 'processing';
+  }
+
+  return 'failed';
+}
+
+function buildQueryString(params) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+
+    searchParams.set(key, String(value));
+  });
+
+  return searchParams.toString();
+}
+
+function paginateClientRows(rows, page, pageSize) {
+  const total = rows.length;
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+  const currentPage = Math.min(page, totalPages);
+  const startIndex = (currentPage - 1) * pageSize;
+
+  return {
+    rows: rows.slice(startIndex, startIndex + pageSize),
+    pagination: {
+      page: currentPage,
+      pageSize,
+      total,
+      totalPages,
+    },
+  };
+}
+
+function readStoredSession() {
+  const rawValue = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawValue);
+  } catch {
+    return null;
+  }
+}
+
+function getMenuFromPath(pathname) {
+  const matchedItem = MENU_ITEMS.find((item) => pathname === item.path);
+  return matchedItem?.key || 'dashboard';
+}
+
+function navigateToPath(path, replace = false) {
+  if (window.location.pathname === path) {
+    return;
+  }
+
+  if (replace) {
+    window.history.replaceState({}, '', path);
+  } else {
+    window.history.pushState({}, '', path);
+  }
+}
+
+function createBatchFilters(eventType) {
+  return {
+    branchId: '',
+    terminalId: '',
+    status: '',
+    startDate: '',
+    endDate: '',
+    page: 1,
+    pageSize: 10,
+    type: eventType,
+  };
+}
+
+async function requestJson(path, { method = 'GET', token, body, signal } = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    signal,
+  });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = new Error(payload?.message || `Request failed with ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return payload;
+}
+
+function useReconApi(path, params, token, enabled = true, onUnauthorized) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!enabled || !token) {
+      setLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const queryString = buildQueryString(params);
+
+    async function loadData() {
+      setLoading(true);
+      setError('');
+
+      try {
+        const payload = await requestJson(`${path}${queryString ? `?${queryString}` : ''}`, {
+          token,
+          signal: controller.signal,
+        });
+        setData(payload);
+      } catch (loadError) {
+        if (loadError.name === 'AbortError') {
+          return;
+        }
+
+        if (loadError.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
+
+        setError(loadError.message || 'Failed to load dashboard data');
+        setData(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadData();
+
+    return () => controller.abort();
+  }, [enabled, path, token, JSON.stringify(params)]);
+
+  return { data, loading, error };
+}
+
+function MetricCard({ label, value, meta, accent }) {
+  return (
+    <article className={`metric-card ${accent || ''}`}>
+      <p className="eyebrow">{label}</p>
+      <h3>{value}</h3>
+      <p className="metric-meta">{meta}</p>
+    </article>
+  );
+}
+
+function StatusPill({ status, bucket }) {
+  return <span className={`status-pill ${statusTone(bucket)}`}>{status}</span>;
+}
+
+function PerformanceList({ rows, valueKey, className = '' }) {
+  const maxValue = Math.max(...rows.map((row) => row[valueKey] || 0), 1);
+
+  return (
+    <div className={`performance-list ${className}`.trim()}>
+      {rows.map((row) => {
+        const width = `${Math.max(((row[valueKey] || 0) / maxValue) * 100, 6)}%`;
+        return (
+          <article key={row.key} className="performance-row">
+            <div className="performance-header">
+              <div>
+                <h4>{row.label}</h4>
+                <p>
+                  {row.branchId ? `Branch ${row.branchId} • ` : ''}
+                  {formatNumber(row.salesCount)} sales
+                </p>
+              </div>
+              <strong>{formatCurrency(row.totalAmount)}</strong>
+            </div>
+            <div className="performance-bar-track">
+              <div className="performance-bar-fill" style={{ width }} />
+            </div>
+            <div className="performance-meta">
+              <span>Posted {formatNumber(row.postedSalesCount)}</span>
+              <span>Pending {formatNumber(row.pendingSalesCount)}</span>
+              <span>Batches {formatNumber(row.batches)}</span>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function DataState({ loading, error, empty, children }) {
+  if (loading) {
+    return <section className="state-panel">Loading reconciliation data...</section>;
+  }
+
+  if (error) {
+    return <section className="state-panel error-panel">{error}</section>;
+  }
+
+  if (empty) {
+    return <section className="state-panel">No data found for the selected filters.</section>;
+  }
+
+  return children;
+}
+
+function Pagination({ pagination, onPageChange }) {
+  if (!pagination || pagination.totalPages <= 1) {
+    return null;
+  }
+
+  return (
+    <div className="pagination-bar">
+      <button
+        type="button"
+        className="pagination-button"
+        onClick={() => onPageChange(pagination.page - 1)}
+        disabled={pagination.page <= 1}
+      >
+        Previous
+      </button>
+      <span>
+        Page {pagination.page} of {pagination.totalPages} • {formatNumber(pagination.total)} records
+      </span>
+      <button
+        type="button"
+        className="pagination-button"
+        onClick={() => onPageChange(pagination.page + 1)}
+        disabled={pagination.page >= pagination.totalPages}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+function FilterField({ label, children }) {
+  return (
+    <label className="filter-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function PageSizeField({ value, onChange }) {
+  return (
+    <FilterField label="Page size">
+      <select value={value} onChange={(event) => onChange(Number(event.target.value))}>
+        {PAGE_SIZE_OPTIONS.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </FilterField>
+  );
+}
+
+function SaleDetailsDialog({ sale, onClose }) {
+  if (!sale) {
+    return null;
+  }
+
+  return (
+    <div className="dialog-backdrop" onClick={onClose}>
+      <section
+        className="dialog-panel sale-details-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sale-details-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Sale Details</p>
+            <h2 id="sale-details-title">Sale #{sale.saleId}</h2>
+          </div>
+          <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+        </div>
+
+        <article className="detail-reason-card">
+          <div className="detail-reason-header">
+            <strong>{sale.postedToSage ? 'Posting result' : 'Why this sale is pending'}</strong>
+            <StatusPill status={sale.batchStatus} bucket={sale.batchStatusBucket} />
+          </div>
+          <p>{sale.pendingReason || 'No additional detail is available for this sale.'}</p>
+        </article>
+
+        <div className="detail-grid">
+          <article className="detail-card">
+            <span>Receipt</span>
+            <strong>{sale.receiptNumber || 'N/A'}</strong>
+          </article>
+          <article className="detail-card">
+            <span>Branch</span>
+            <strong>{sale.branchId}</strong>
+          </article>
+          <article className="detail-card">
+            <span>Terminal</span>
+            <strong>{sale.terminalId}</strong>
+          </article>
+          <article className="detail-card">
+            <span>Amount</span>
+            <strong>{formatCurrency(sale.amount)}</strong>
+          </article>
+          <article className="detail-card">
+            <span>Payment</span>
+            <strong>{sale.paymentMethod || 'N/A'}</strong>
+          </article>
+          <article className="detail-card">
+            <span>OE order</span>
+            <strong>{sale.oeOrderNumber || 'Pending'}</strong>
+          </article>
+        </div>
+
+        <div className="detail-list">
+          <div>
+            <span>Batch received</span>
+            <strong>{formatDateTime(sale.batchReceivedAt)}</strong>
+          </div>
+          <div>
+            <span>Batch processed</span>
+            <strong>{sale.batchProcessedAt ? formatDateTime(sale.batchProcessedAt) : 'Not processed yet'}</strong>
+          </div>
+          <div>
+            <span>Last attempt</span>
+            <strong>{sale.batchLastAttemptAt ? formatDateTime(sale.batchLastAttemptAt) : 'No attempt recorded'}</strong>
+          </div>
+          <div>
+            <span>Retry count</span>
+            <strong>{formatNumber(sale.batchRetryCount)}</strong>
+          </div>
+          <div>
+            <span>Sage reference</span>
+            <strong>{sale.sageReference || 'N/A'}</strong>
+          </div>
+          <div>
+            <span>Idempotency key</span>
+            <strong>{sale.batchIdempotencyKey || 'N/A'}</strong>
+          </div>
+          <div className="detail-list-full">
+            <span>Last batch error</span>
+            <strong>{sale.batchLastError || 'No batch error recorded'}</strong>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin, loading }) {
+  const [email, setEmail] = useState('admin@recon.local');
+  const [password, setPassword] = useState('admin123');
+  const [error, setError] = useState('');
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const result = await onLogin({ email, password });
+    if (result?.error) {
+      setError(result.error);
+      return;
+    }
+
+    setError('');
+  }
+
+  return (
+    <div className="login-shell">
+      <section className="login-panel login-brand-panel">
+        <p className="eyebrow">Recon Dashboard</p>
+        <h1>Finance visibility for every sale, batch, and Sage posting.</h1>
+        <p className="login-copy">
+          Track what has reached Sage, what is pending, and where branch or terminal-level reconciliation needs attention.
+        </p>
+      </section>
+
+      <section className="login-panel login-form-panel">
+        <div>
+          <p className="eyebrow">Secure sign in</p>
+          <h2>Login to continue</h2>
+          <p className="login-copy">Credentials are now validated by Central Sync Server users, not browser-local demo state.</p>
+        </div>
+
+        <form className="login-form" onSubmit={handleSubmit}>
+          <FilterField label="Email address">
+            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
+          </FilterField>
+          <FilterField label="Password">
+            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required />
+          </FilterField>
+          {error ? <div className="inline-error">{error}</div> : null}
+          <button type="submit" className="primary-button" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function DashboardScreen({ token, onUnauthorized }) {
+  const [days, setDays] = useState(14);
+  const [branchPage, setBranchPage] = useState(1);
+  const [branchPageSize, setBranchPageSize] = useState(10);
+  const [terminalPage, setTerminalPage] = useState(1);
+  const [terminalPageSize, setTerminalPageSize] = useState(10);
+  const [attentionPage, setAttentionPage] = useState(1);
+  const [attentionPageSize, setAttentionPageSize] = useState(10);
+  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
+
+  const summary = data?.summary || {
+    postedSalesCount: 0,
+    totalSalesCount: 0,
+    totalBatches: 0,
+    pendingSalesCount: 0,
+    pendingBatches: 0,
+    failedBatches: 0,
+    totalSalesValue: 0,
+    totalCreditNotesCount: 0,
+    totalCreditNotesValue: 0,
+    documentSummary: {},
+  };
+  const branchPerformance = data?.branchPerformance || [];
+  const terminalPerformance = data?.terminalPerformance || [];
+  const recentBatches = data?.recentBatches || [];
+  const recentExports = data?.recentExports || [];
+  const documentCards = useMemo(() => {
+    const rows = summary?.documentSummary || {};
+    return Object.entries(rows)
+      .map(([key, value]) => ({ key, value }))
+      .sort((left, right) => right.value - left.value);
+  }, [summary]);
+
+  const attentionBatches = useMemo(
+    () => recentBatches.filter((row) => row.statusBucket !== 'completed'),
+    [recentBatches]
+  );
+  const paginatedBranchPerformance = useMemo(
+    () => paginateClientRows(branchPerformance, branchPage, branchPageSize),
+    [branchPage, branchPageSize, branchPerformance]
+  );
+  const paginatedTerminalPerformance = useMemo(
+    () => paginateClientRows(terminalPerformance, terminalPage, terminalPageSize),
+    [terminalPage, terminalPageSize, terminalPerformance]
+  );
+  const paginatedAttentionBatches = useMemo(
+    () => paginateClientRows(attentionBatches, attentionPage, attentionPageSize),
+    [attentionBatches, attentionPage, attentionPageSize]
+  );
+
+  useEffect(() => {
+    setBranchPage(1);
+    setTerminalPage(1);
+    setAttentionPage(1);
+  }, [days, branchPageSize, terminalPageSize, attentionPageSize]);
+
+  return (
+    <section className="page-section">
+      <div className="page-hero">
+        <div>
+          <p className="eyebrow">Finance 360 visibility</p>
+          <h1>Dashboard</h1>
+          <p className="page-copy">Summaries of reconciliation data across sales and day-end batch posting.</p>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          {DAY_FILTERS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === days ? 'filter-chip active' : 'filter-chip'}
+              onClick={() => setDays(value)}
+            >
+              Last {value} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={!data?.summary}>
+        <>
+          <section className="metric-grid">
+            <MetricCard
+              label="Sales Posted To Sage"
+              value={formatNumber(summary.postedSalesCount)}
+              meta={`${formatNumber(summary.totalSalesCount)} captured in ${formatNumber(summary.totalBatches)} batches`}
+              accent="accent-green"
+            />
+            <MetricCard
+              label="Pending Sales"
+              value={formatNumber(summary.pendingSalesCount)}
+              meta={`${formatNumber(summary.pendingBatches)} batches still in flight`}
+              accent="accent-amber"
+            />
+            <MetricCard
+              label="Failed Batches"
+              value={formatNumber(summary.failedBatches)}
+              meta="Needs finance or ops attention"
+              accent="accent-red"
+            />
+            <MetricCard
+              label="Credit Notes"
+              value={formatNumber(summary.totalCreditNotesCount)}
+              meta={`${formatCurrency(summary.totalCreditNotesValue)} returned value`}
+              accent="accent-amber"
+            />
+            <MetricCard
+              label="Sales Value"
+              value={formatCurrency(summary.totalSalesValue)}
+              meta="Total value inside day-end batches"
+            />
+          </section>
+
+          <section className="content-grid three-columns">
+            <article className="panel panel-span-2">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Branch view</p>
+                  <h2>Sales by branch</h2>
+                </div>
+                <p>Revenue, posted sales, and pending exposure per branch.</p>
+              </div>
+              <div className="toolbar-row compact-toolbar">
+                <PageSizeField value={branchPageSize} onChange={setBranchPageSize} />
+              </div>
+              <PerformanceList rows={paginatedBranchPerformance.rows} valueKey="totalAmount" className="scroll-panel-list" />
+              <Pagination pagination={paginatedBranchPerformance.pagination} onPageChange={setBranchPage} />
+            </article>
+
+            <article className="panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Document mix</p>
+                  <h2>Transaction volume</h2>
+                </div>
+                <p>Counts flowing through each Sage document stream.</p>
+              </div>
+              <div className="document-grid">
+                {documentCards.map((card) => (
+                  <article key={card.key} className="document-card">
+                    <span>{titleizeDocumentType(card.key)}</span>
+                    <strong>{formatNumber(card.value)}</strong>
+                  </article>
+                ))}
+              </div>
+            </article>
+          </section>
+
+          <section className="content-grid two-columns">
+            <article className="panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Terminal visibility</p>
+                  <h2>Sales by terminal</h2>
+                </div>
+                <p>Terminal-level throughput and pending work.</p>
+              </div>
+              <div className="toolbar-row compact-toolbar">
+                <PageSizeField value={terminalPageSize} onChange={setTerminalPageSize} />
+              </div>
+              <PerformanceList rows={paginatedTerminalPerformance.rows} valueKey="salesCount" className="scroll-panel-list" />
+              <Pagination pagination={paginatedTerminalPerformance.pagination} onPageChange={setTerminalPage} />
+            </article>
+
+            <article className="panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Attention queue</p>
+                  <h2>Pending and failed batches</h2>
+                </div>
+                <p>Highest-priority items for reconciliation follow-up.</p>
+              </div>
+              <div className="toolbar-row compact-toolbar">
+                <PageSizeField value={attentionPageSize} onChange={setAttentionPageSize} />
+              </div>
+              <div className="attention-list scroll-panel-list">
+                {paginatedAttentionBatches.rows.length === 0 ? (
+                  <div className="attention-empty">No pending or failed batches in the selected window.</div>
+                ) : (
+                  paginatedAttentionBatches.rows.map((batch) => (
+                    <article key={batch.id} className="attention-item">
+                      <div>
+                        <StatusPill status={batch.status} bucket={batch.statusBucket} />
+                        <h3>{batch.label}</h3>
+                        <p>
+                          Branch {batch.branchId} • Terminal {batch.terminalId} • {formatNumber(batch.transactionCount)} transactions
+                        </p>
+                      </div>
+                      <div className="attention-meta">
+                        <strong>{formatCurrency(batch.totalAmount)}</strong>
+                        <span>{formatDateTime(batch.receivedAt)}</span>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+              <Pagination pagination={paginatedAttentionBatches.pagination} onPageChange={setAttentionPage} />
+            </article>
+          </section>
+
+          {/* <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Recent batches</p>
+                <h2>Current batch monitor</h2>
+              </div>
+              <p>Latest OE order batches captured by the reconciliation service.</p>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Batch</th>
+                    <th>Status</th>
+                    <th>Branch</th>
+                    <th>Terminal</th>
+                    <th>Transactions</th>
+                    <th>Value</th>
+                    <th>Exported</th>
+                    <th>Received</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentBatches.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <div className="table-title">{row.label}</div>
+                        <div className="table-subtitle">{row.idempotencyKey}</div>
+                      </td>
+                      <td><StatusPill status={row.status} bucket={row.statusBucket} /></td>
+                      <td>{row.branchId}</td>
+                      <td>{row.terminalId}</td>
+                      <td>{formatNumber(row.transactionCount)}</td>
+                      <td>{formatCurrency(row.totalAmount)}</td>
+                      <td>{formatNumber(row.exportedCount)}</td>
+                      <td>{formatDateTime(row.receivedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section> */}
+
+          {/* <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Recent Sage exports</p>
+                <h2>Sales sent to Sage</h2>
+              </div>
+              <p>Recent export evidence across document types.</p>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Sale</th>
+                    <th>Branch</th>
+                    <th>Terminal</th>
+                    <th>Document</th>
+                    <th>Sage No.</th>
+                    <th>Reference</th>
+                    <th>Amount</th>
+                    <th>Exported</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentExports.map((row) => (
+                    <tr key={`${row.id}-${row.documentType}`}>
+                      <td>
+                        <div className="table-title">Sale #{row.saleId}</div>
+                        <div className="table-subtitle">Receipt {row.receiptNumber || 'N/A'}</div>
+                      </td>
+                      <td>{row.branchId}</td>
+                      <td>{row.terminalId}</td>
+                      <td>{titleizeDocumentType(row.documentType)}</td>
+                      <td>
+                        <div className="table-title">{row.sageDocumentNumber}</div>
+                        <div className="table-subtitle">{row.sageDocumentUniquifier || 'No uniquifier'}</div>
+                      </td>
+                      <td>{row.sageReference || 'N/A'}</td>
+                      <td>{formatCurrency(row.saleAmount)}</td>
+                      <td>{formatDateTime(row.exportedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section> */}
+        </>
+      </DataState>
+    </section>
+  );
+}
+
+function TerminalVisibilityScreen({ token, onUnauthorized }) {
+  const [days, setDays] = useState(14);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
+  const terminalPerformance = data?.terminalPerformance || [];
+  const paginatedRows = useMemo(
+    () => paginateClientRows(terminalPerformance, page, pageSize),
+    [page, pageSize, terminalPerformance]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [days, pageSize]);
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">Terminal visibility</p>
+          <h1>Sales by terminal</h1>
+          <p className="page-copy">Review terminal-level throughput, posted volume, and pending work across the selected period.</p>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          {DAY_FILTERS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === days ? 'filter-chip active' : 'filter-chip'}
+              onClick={() => setDays(value)}
+            >
+              Last {value} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={terminalPerformance.length === 0}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Terminal register</p>
+              <h2>Performance by terminal</h2>
+            </div>
+            <p>{formatNumber(paginatedRows.pagination.total)} terminals in the selected window.</p>
+          </div>
+          <div className="toolbar-row compact-toolbar">
+            <PageSizeField value={pageSize} onChange={setPageSize} />
+          </div>
+          <PerformanceList rows={paginatedRows.rows} valueKey="salesCount" className="scroll-panel-list" />
+          <Pagination pagination={paginatedRows.pagination} onPageChange={setPage} />
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
+function ZraComplianceScreen({ token, onUnauthorized }) {
+  const [days, setDays] = useState(14);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, loading, error } = useReconApi('/api/recon/zra-compliance', { days, limit: 100 }, token, true, onUnauthorized);
+  const summary = data?.summary || {
+    totalSalesCount: 0,
+    submittedCount: 0,
+    pendingCount: 0,
+    failedCount: 0,
+    receiptPrintedCount: 0,
+    qrArtifactCount: 0,
+    complianceRate: 0,
+    printedRate: 0,
+    qrRate: 0,
+  };
+  const terminalCompliance = data?.terminalCompliance || [];
+  const paginatedRows = useMemo(
+    () => paginateClientRows(terminalCompliance, page, pageSize),
+    [page, pageSize, terminalCompliance]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [days, pageSize]);
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">ZRA compliance</p>
+          <h1>Terminal compliance</h1>
+          <p className="page-copy">Monitor ZRA submission health per terminal, including pending, failed, printed, and QR artifact coverage.</p>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          {DAY_FILTERS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === days ? 'filter-chip active' : 'filter-chip'}
+              onClick={() => setDays(value)}
+            >
+              Last {value} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={terminalCompliance.length === 0}>
+        <>
+          <section className="metric-grid">
+            <MetricCard
+              label="ZRA Submitted"
+              value={formatNumber(summary.submittedCount)}
+              meta={`${formatNumber(summary.totalSalesCount)} sales tracked`}
+              accent="accent-green"
+            />
+            <MetricCard
+              label="ZRA Pending"
+              value={formatNumber(summary.pendingCount)}
+              meta="Sales still waiting for ZRA submission"
+              accent="accent-amber"
+            />
+            <MetricCard
+              label="ZRA Failed"
+              value={formatNumber(summary.failedCount)}
+              meta="Sales that need retry or manual review"
+              accent="accent-red"
+            />
+            <MetricCard
+              label="Compliance Rate"
+              value={`${Number(summary.complianceRate || 0).toFixed(1)}%`}
+              meta={`QR present on ${Number(summary.qrRate || 0).toFixed(1)}% of sales`}
+            />
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Terminal register</p>
+                <h2>Compliance by terminal</h2>
+              </div>
+              <p>{formatNumber(paginatedRows.pagination.total)} terminals in the selected window.</p>
+            </div>
+            <div className="toolbar-row compact-toolbar">
+              <PageSizeField value={pageSize} onChange={setPageSize} />
+            </div>
+            <div className="table-wrap scroll-panel-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Branch</th>
+                    <th>Terminal</th>
+                    <th>Sales</th>
+                    <th>Submitted</th>
+                    <th>Pending</th>
+                    <th>Failed</th>
+                    <th>Printed</th>
+                    <th>QR</th>
+                    <th>Compliance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedRows.rows.map((row) => (
+                    <tr key={row.key}>
+                      <td>{row.branchId || 'Unassigned'}</td>
+                      <td>
+                        <div className="table-title">{row.terminalId || 'Unassigned'}</div>
+                        <div className="table-subtitle">{row.label}</div>
+                      </td>
+                      <td>{formatNumber(row.totalSalesCount)}</td>
+                      <td>{formatNumber(row.submittedCount)}</td>
+                      <td>{formatNumber(row.pendingCount)}</td>
+                      <td>{formatNumber(row.failedCount)}</td>
+                      <td>{formatNumber(row.receiptPrintedCount)}</td>
+                      <td>{formatNumber(row.qrArtifactCount)}</td>
+                      <td>
+                        <StatusPill status={`${Number(row.complianceRate || 0).toFixed(1)}%`} bucket={complianceBucket(row.complianceRate || 0)} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination pagination={paginatedRows.pagination} onPageChange={setPage} />
+          </section>
+        </>
+      </DataState>
+    </section>
+  );
+}
+
+function AttentionQueueScreen({ token, onUnauthorized }) {
+  const [days, setDays] = useState(14);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
+  const attentionBatches = useMemo(
+    () => (data?.recentBatches || []).filter((row) => row.statusBucket !== 'completed'),
+    [data]
+  );
+  const paginatedRows = useMemo(
+    () => paginateClientRows(attentionBatches, page, pageSize),
+    [attentionBatches, page, pageSize]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [days, pageSize]);
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">Attention queue</p>
+          <h1>Pending and failed batches</h1>
+          <p className="page-copy">Focus finance follow-up on batches that are still pending or have failed during synchronization.</p>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          {DAY_FILTERS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === days ? 'filter-chip active' : 'filter-chip'}
+              onClick={() => setDays(value)}
+            >
+              Last {value} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={attentionBatches.length === 0}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Reconciliation follow-up</p>
+              <h2>Attention queue</h2>
+            </div>
+            <p>{formatNumber(paginatedRows.pagination.total)} batches currently need attention.</p>
+          </div>
+          <div className="toolbar-row compact-toolbar">
+            <PageSizeField value={pageSize} onChange={setPageSize} />
+          </div>
+          <div className="attention-list scroll-panel-list">
+            {paginatedRows.rows.map((batch) => (
+              <article key={batch.id} className="attention-item">
+                <div>
+                  <StatusPill status={batch.status} bucket={batch.statusBucket} />
+                  <h3>{batch.label}</h3>
+                  <p>
+                    Branch {batch.branchId} • Terminal {batch.terminalId} • {formatNumber(batch.transactionCount)} transactions
+                  </p>
+                </div>
+                <div className="attention-meta">
+                  <strong>{formatCurrency(batch.totalAmount)}</strong>
+                  <span>{formatDateTime(batch.receivedAt)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+          <Pagination pagination={paginatedRows.pagination} onPageChange={setPage} />
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
+function SalesScreen({ token, onUnauthorized }) {
+  const [filters, setFilters] = useState({
+    branchId: '',
+    terminalId: '',
+    startDate: '',
+    endDate: '',
+    page: 1,
+    pageSize: 10,
+  });
+  const [selectedSale, setSelectedSale] = useState(null);
+  const { data, loading, error } = useReconApi('/api/recon/sales', filters, token, true, onUnauthorized);
+  const rows = data?.rows || [];
+  const filterMeta = data?.filters || {};
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({
+      ...current,
+      [key]: value,
+      page: key === 'page' ? value : 1,
+    }));
+  }
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">Sales detail</p>
+          <h1>Sales</h1>
+          <p className="page-copy">List all sales with branch, terminal, date, Sage posting details, and pending reasons.</p>
+        </div>
+      </div>
+
+      <section className="panel filter-panel">
+        <div className="filter-grid four-columns">
+          <FilterField label="Branch">
+            <select value={filters.branchId} onChange={(event) => updateFilter('branchId', event.target.value)}>
+              <option value="">All branches</option>
+              {(filterMeta.branchOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Terminal">
+            <select value={filters.terminalId} onChange={(event) => updateFilter('terminalId', event.target.value)}>
+              <option value="">All terminals</option>
+              {(filterMeta.terminalOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Start date">
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter('startDate', event.target.value)} />
+          </FilterField>
+          <FilterField label="End date">
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter('endDate', event.target.value)} />
+          </FilterField>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          <PageSizeField value={filters.pageSize} onChange={(value) => updateFilter('pageSize', value)} />
+        </div>
+      </section>
+
+      <DataState loading={loading} error={error} empty={rows.length === 0}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Sales ledger</p>
+              <h2>All sales in scope</h2>
+            </div>
+            <p>{formatNumber(data?.pagination?.total || 0)} sales matching the selected filters.</p>
+          </div>
+          <div className="table-wrap scroll-panel-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Sale</th>
+                  <th>Branch</th>
+                  <th>Terminal</th>
+                  <th>Date</th>
+                  <th>Payment</th>
+                  <th>Amount</th>
+                  <th>OE Order</th>
+                  <th>Batch Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <div className="table-title">Sale #{row.saleId}</div>
+                      <div className="table-subtitle">Receipt {row.receiptNumber || 'N/A'}</div>
+                    </td>
+                    <td>{row.branchId}</td>
+                    <td>{row.terminalId}</td>
+                    <td>
+                      <div className="table-title">{formatShortDate(row.saleDate)}</div>
+                      <div className="table-subtitle">{formatDateTime(row.batchReceivedAt)}</div>
+                    </td>
+                    <td>{row.paymentMethod || 'N/A'}</td>
+                    <td>{formatCurrency(row.amount)}</td>
+                    <td>{row.oeOrderNumber || 'Pending'}</td>
+                    <td><StatusPill status={row.batchStatus} bucket={row.batchStatusBucket} /></td>
+                    <td>
+                      <button type="button" className="secondary-button details-button" onClick={() => setSelectedSale(row)}>
+                        View details
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination pagination={data?.pagination} onPageChange={(page) => updateFilter('page', page)} />
+        </section>
+      </DataState>
+      <SaleDetailsDialog sale={selectedSale} onClose={() => setSelectedSale(null)} />
+    </section>
+  );
+}
+
+function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized }) {
+  const [filters, setFilters] = useState(() => createBatchFilters(eventType));
+  const { data, loading, error } = useReconApi('/api/recon/batches', filters, token, true, onUnauthorized);
+  const rows = data?.rows || [];
+  const filterMeta = data?.filters || {};
+
+  useEffect(() => {
+    setFilters(createBatchFilters(eventType));
+  }, [eventType]);
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({
+      ...current,
+      [key]: value,
+      page: key === 'page' ? value : 1,
+    }));
+  }
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">{eyebrow}</p>
+          <h1>{title}</h1>
+          <p className="page-copy">Filter and paginate batch activity by branch, terminal, status, and date.</p>
+        </div>
+      </div>
+
+      <section className="panel filter-panel">
+        <div className="filter-grid five-columns">
+          <FilterField label="Branch">
+            <select value={filters.branchId} onChange={(event) => updateFilter('branchId', event.target.value)}>
+              <option value="">All branches</option>
+              {(filterMeta.branchOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Terminal">
+            <select value={filters.terminalId} onChange={(event) => updateFilter('terminalId', event.target.value)}>
+              <option value="">All terminals</option>
+              {(filterMeta.terminalOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Status">
+            <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
+              <option value="">All statuses</option>
+              {(filterMeta.statusOptions || []).map((option) => (
+                <option key={option} value={option}>{slugToTitle(option)}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Start date">
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter('startDate', event.target.value)} />
+          </FilterField>
+          <FilterField label="End date">
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter('endDate', event.target.value)} />
+          </FilterField>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          <PageSizeField value={filters.pageSize} onChange={(value) => updateFilter('pageSize', value)} />
+        </div>
+      </section>
+
+      <DataState loading={loading} error={error} empty={rows.length === 0}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Batch register</p>
+              <h2>{title}</h2>
+            </div>
+            <p>{formatNumber(data?.pagination?.total || 0)} batches found.</p>
+          </div>
+          <div className="table-wrap scroll-panel-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Batch</th>
+                  <th>Status</th>
+                  <th>Branch</th>
+                  <th>Terminal</th>
+                  <th>Transactions</th>
+                  <th>Value</th>
+                  <th>Exported</th>
+                  <th>Retries</th>
+                  <th>Received</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <div className="table-title">{row.label}</div>
+                      <div className="table-subtitle">{row.idempotencyKey}</div>
+                    </td>
+                    <td><StatusPill status={row.status} bucket={row.statusBucket} /></td>
+                    <td>{row.branchId}</td>
+                    <td>{row.terminalId}</td>
+                    <td>{formatNumber(row.transactionCount)}</td>
+                    <td>{formatCurrency(row.totalAmount)}</td>
+                    <td>{formatNumber(row.exportedCount)}</td>
+                    <td>{formatNumber(row.retryCount)}</td>
+                    <td>{formatDateTime(row.receivedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination pagination={data?.pagination} onPageChange={(page) => updateFilter('page', page)} />
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
+function UserManagementScreen({ token, currentUser, onUnauthorized }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [form, setForm] = useState({
+    fullName: '',
+    email: '',
+    password: '',
+    role: 'finance',
+  });
+
+  useEffect(() => {
+    if (currentUser.role !== 'admin') {
+      setLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    async function loadUsers() {
+      setLoading(true);
+      setError('');
+
+      try {
+        const payload = await requestJson('/api/recon/auth/users', {
+          token,
+          signal: controller.signal,
+        });
+        setUsers(payload.users || []);
+      } catch (loadError) {
+        if (loadError.name === 'AbortError') {
+          return;
+        }
+
+        if (loadError.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
+
+        setError(loadError.message || 'Failed to load users');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadUsers();
+
+    return () => controller.abort();
+  }, [token, currentUser.role]);
+
+  const paginatedUsers = useMemo(
+    () => paginateClientRows(users, page, pageSize),
+    [page, pageSize, users]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
+
+  if (currentUser.role !== 'admin') {
+    return (
+      <section className="page-section">
+        <div className="page-hero compact-hero">
+          <div>
+            <p className="eyebrow">Access control</p>
+            <h1>User Management</h1>
+            <p className="page-copy">Only recon admins can manage dashboard users.</p>
+          </div>
+        </div>
+        <section className="panel">
+          <div className="attention-empty">Your current role does not allow user administration.</div>
+        </section>
+      </section>
+    );
+  }
+
+  function updateForm(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function createUser(event) {
+    event.preventDefault();
+    setMessage('');
+    setError('');
+
+    try {
+      const payload = await requestJson('/api/recon/auth/users', {
+        method: 'POST',
+        token,
+        body: form,
+      });
+      setUsers((current) => [...current, payload.user]);
+      setForm({ fullName: '', email: '', password: '', role: 'finance' });
+      setMessage('User created.');
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setError(requestError.message || 'Failed to create user');
+    }
+  }
+
+  async function toggleActive(targetUser) {
+    setMessage('');
+    setError('');
+
+    try {
+      const payload = await requestJson(`/api/recon/auth/users/${targetUser.id}`, {
+        method: 'PATCH',
+        token,
+        body: { active: !targetUser.active },
+      });
+      setUsers((current) => current.map((user) => (user.id === payload.user.id ? payload.user : user)));
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setError(requestError.message || 'Failed to update user');
+    }
+  }
+
+  async function deleteUser(targetUser) {
+    setMessage('');
+    setError('');
+
+    try {
+      await requestJson(`/api/recon/auth/users/${targetUser.id}`, {
+        method: 'DELETE',
+        token,
+      });
+      setUsers((current) => current.filter((user) => user.id !== targetUser.id));
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setError(requestError.message || 'Failed to delete user');
+    }
+  }
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">Dashboard access</p>
+          <h1>User Management</h1>
+          <p className="page-copy">Manage sync-server finance users, roles, and activation status.</p>
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={false}>
+        <section className="content-grid two-columns">
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Create user</p>
+                <h2>Add dashboard access</h2>
+              </div>
+            </div>
+            <form className="user-form" onSubmit={createUser}>
+              <FilterField label="Full name">
+                <input value={form.fullName} onChange={(event) => updateForm('fullName', event.target.value)} required />
+              </FilterField>
+              <FilterField label="Email">
+                <input type="email" value={form.email} onChange={(event) => updateForm('email', event.target.value)} required />
+              </FilterField>
+              <FilterField label="Temporary password">
+                <input type="text" value={form.password} onChange={(event) => updateForm('password', event.target.value)} required />
+              </FilterField>
+              <FilterField label="Role">
+                <select value={form.role} onChange={(event) => updateForm('role', event.target.value)}>
+                  <option value="finance">Finance</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </FilterField>
+              {message ? <div className="inline-note">{message}</div> : null}
+              <button type="submit" className="primary-button">Create user</button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Current users</p>
+                <h2>Access register</h2>
+              </div>
+            </div>
+            <div className="toolbar-row compact-toolbar">
+              <PageSizeField value={pageSize} onChange={setPageSize} />
+            </div>
+            <div className="user-list scroll-panel-list">
+              {paginatedUsers.rows.map((user) => (
+                <article key={user.id} className="user-card">
+                  <div>
+                    <h3>{user.fullName}</h3>
+                    <p>{user.email}</p>
+                  </div>
+                  <div className="user-meta">
+                    <span className="role-pill">{slugToTitle(user.role)}</span>
+                    <span className={user.active ? 'status-text active' : 'status-text inactive'}>
+                      {user.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <div className="user-actions">
+                    <button type="button" className="secondary-button" onClick={() => toggleActive(user)}>
+                      {user.active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    {user.id !== currentUser.id ? (
+                      <button type="button" className="secondary-button danger-button" onClick={() => deleteUser(user)}>
+                        Delete
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+            <Pagination pagination={paginatedUsers.pagination} onPageChange={setPage} />
+          </article>
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
+function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children }) {
+  const currentMenu = MENU_ITEMS.find((item) => item.key === activeMenu);
+
+  return (
+    <div className="workspace-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <p className="eyebrow">Recon Dashboard</p>
+          <h2>Finance workspace</h2>
+        </div>
+        <nav className="sidebar-nav">
+          {MENU_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={item.key === activeMenu ? 'sidebar-link active' : 'sidebar-link'}
+              onClick={() => onMenuChange(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <strong>{currentUser.fullName}</strong>
+          <span>{currentUser.email}</span>
+          <button type="button" className="secondary-button" onClick={onLogout}>Logout</button>
+        </div>
+      </aside>
+
+      <main className="workspace-main">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Current section</p>
+            <h2>{currentMenu?.label || 'Dashboard'}</h2>
+          </div>
+          <div className="topbar-meta">
+            <span>API: {API_BASE_URL}</span>
+            <span>Role: {slugToTitle(currentUser.role)}</span>
+          </div>
+        </header>
+        {children}
+      </main>
+    </div>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(() => readStoredSession());
+  const [activeMenu, setActiveMenu] = useState(() => getMenuFromPath(window.location.pathname));
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  useEffect(() => {
+    function handlePopState() {
+      setActiveMenu(getMenuFromPath(window.location.pathname));
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (session) {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      if (window.location.pathname === '/' || window.location.pathname === '/login') {
+        navigateToPath('/dashboard', true);
+        setActiveMenu('dashboard');
+      }
+      return;
+    }
+
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    if (window.location.pathname !== '/login') {
+      navigateToPath('/login', true);
+    }
+  }, [session]);
+
+  async function refreshCurrentUser(token) {
+    const payload = await requestJson('/api/recon/auth/me', { token });
+    return payload.user;
+  }
+
+  async function handleLogin(credentials) {
+    setLoginLoading(true);
+
+    try {
+      const payload = await requestJson('/api/recon/auth/login', {
+        method: 'POST',
+        body: credentials,
+      });
+      setSession({ token: payload.token, user: payload.user });
+      navigateToPath('/dashboard');
+      setActiveMenu('dashboard');
+      return { ok: true };
+    } catch (loginError) {
+      return { error: loginError.message || 'Login failed' };
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  function handleLogout() {
+    setSession(null);
+    setActiveMenu('dashboard');
+  }
+
+  function handleUnauthorized() {
+    setSession(null);
+  }
+
+  useEffect(() => {
+    if (!session?.token) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function validateSession() {
+      try {
+        const user = await refreshCurrentUser(session.token);
+        if (!cancelled) {
+          setSession((current) => current ? { ...current, user } : current);
+        }
+      } catch {
+        if (!cancelled) {
+          setSession(null);
+        }
+      }
+    }
+
+    validateSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleMenuChange(menuKey) {
+    const item = MENU_ITEMS.find((entry) => entry.key === menuKey);
+    if (!item) {
+      return;
+    }
+
+    setActiveMenu(menuKey);
+    navigateToPath(item.path);
+  }
+
+  function renderActivePage() {
+    if (!session?.user) {
+      return null;
+    }
+
+    switch (activeMenu) {
+      case 'sales':
+        return <SalesScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'terminal-visibility':
+        return <TerminalVisibilityScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'zra-compliance':
+        return <ZraComplianceScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'attention-queue':
+        return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'day-end-batches':
+        return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'user-management':
+        return <UserManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
+      case 'dashboard':
+      default:
+        return <DashboardScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+    }
+  }
+
+  if (!session?.user) {
+    return <LoginScreen onLogin={handleLogin} loading={loginLoading} />;
+  }
+
+  return (
+    <AppShell
+      activeMenu={activeMenu}
+      onMenuChange={handleMenuChange}
+      currentUser={session.user}
+      onLogout={handleLogout}
+    >
+      {renderActivePage()}
+    </AppShell>
+  );
+}
+
+export default App;
