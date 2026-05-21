@@ -192,6 +192,30 @@
     @apply font-semibold text-slate-600;
   }
 
+  .checkbox-field {
+    @apply flex items-start gap-3 rounded-[1.5rem] border border-slate-200/80 bg-slate-50/80 p-4 text-sm text-slate-700;
+  }
+
+  .checkbox-field input {
+    @apply mt-1 h-4 w-4 rounded border-slate-300 px-0 py-0;
+  }
+
+  .checkbox-field span {
+    @apply font-medium leading-6;
+  }
+
+  .upload-field {
+    @apply grid gap-3 rounded-[1.5rem] border border-dashed border-slate-300 bg-slate-50/70 p-4;
+  }
+
+  .upload-label {
+    @apply text-sm font-semibold text-slate-700;
+  }
+
+  .upload-meta {
+    @apply text-sm leading-6 text-slate-500;
+  }
+
   .primary-button,
   .secondary-button,
   .filter-chip,
@@ -441,6 +465,30 @@
   .performance-meta,
   .user-meta {
     @apply flex flex-wrap gap-3 text-sm;
+  }
+
+  .release-summary {
+    @apply grid gap-4;
+  }
+
+  .release-highlight-card {
+    @apply flex flex-col gap-4 rounded-[1.5rem] border border-cyan-100 bg-[linear-gradient(135deg,rgba(8,47,73,0.96),rgba(21,94,117,0.92))] p-5 text-white md:flex-row md:items-center md:justify-between;
+  }
+
+  .release-highlight-card .eyebrow {
+    @apply text-cyan-100;
+  }
+
+  .release-highlight-card h3 {
+    @apply m-0 text-4xl font-extrabold;
+  }
+
+  .release-highlight-card .status-pill {
+    @apply self-start border-white/20 bg-white/10 text-white;
+  }
+
+  .release-detail-list a {
+    @apply text-cyan-700 underline decoration-cyan-200 underline-offset-4 hover:text-cyan-800;
   }
 
   .status-pill,

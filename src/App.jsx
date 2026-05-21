@@ -11,6 +11,7 @@ const MENU_ITEMS = [
   { key: 'zra-compliance', label: 'ZRA Compliance', path: '/zra-compliance' },
   { key: 'attention-queue', label: 'Attention Queue', path: '/attention-queue' },
   { key: 'day-end-batches', label: 'Day End Batches', path: '/day-end-batches' },
+  { key: 'release-management', label: 'Release Management', path: '/release-management' },
   { key: 'user-management', label: 'User Management', path: '/user-management' },
 ];
 
@@ -24,6 +25,18 @@ function formatCurrency(value) {
     currency: 'ZMW',
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
+}
+
+function formatBytes(value) {
+  const numericValue = Number(value || 0);
+  if (!numericValue) {
+    return '0 B';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const unitIndex = Math.min(Math.floor(Math.log(numericValue) / Math.log(1024)), units.length - 1);
+  const normalized = numericValue / (1024 ** unitIndex);
+  return `${normalized.toFixed(normalized >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function formatDateTime(value) {
@@ -1513,6 +1526,259 @@ function UserManagementScreen({ token, currentUser, onUnauthorized }) {
   );
 }
 
+function ReleaseManagementScreen({ token, currentUser, onUnauthorized }) {
+  const [manifest, setManifest] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [form, setForm] = useState({
+    version: '',
+    releaseNotes: '',
+    mandatory: false,
+    installerFile: null,
+  });
+
+  async function loadManifest(signal) {
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload = await requestJson('/updates/version.json', { signal });
+      setManifest(payload);
+    } catch (loadError) {
+      if (loadError.name === 'AbortError') {
+        return;
+      }
+
+      if (loadError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+        return;
+      }
+
+      if (loadError.status === 404) {
+        setManifest(null);
+        return;
+      }
+
+      setError(loadError.message || 'Failed to load published release');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (currentUser.role !== 'admin') {
+      setLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    loadManifest(controller.signal);
+    return () => controller.abort();
+  }, [token, currentUser.role]);
+
+  if (currentUser.role !== 'admin') {
+    return (
+      <section className="page-section">
+        <div className="page-hero compact-hero">
+          <div>
+            <p className="eyebrow">Access control</p>
+            <h1>Release Management</h1>
+            <p className="page-copy">Only recon admins can publish new POS installers.</p>
+          </div>
+        </div>
+        <section className="panel">
+          <div className="attention-empty">Your current role does not allow release publishing.</div>
+        </section>
+      </section>
+    );
+  }
+
+  function updateForm(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handlePublish(event) {
+    event.preventDefault();
+    setPublishing(true);
+    setError('');
+    setMessage('');
+
+    if (!form.version.trim()) {
+      setPublishing(false);
+      setError('Version is required.');
+      return;
+    }
+
+    if (!form.installerFile) {
+      setPublishing(false);
+      setError('Choose the setup executable to publish.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/updates/admin/upload`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/octet-stream',
+          'x-update-version': form.version.trim(),
+          'x-file-name': form.installerFile.name,
+          'x-release-notes': form.releaseNotes.trim(),
+          'x-update-mandatory': String(form.mandatory),
+        },
+        body: form.installerFile,
+      });
+
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+
+      if (!response.ok) {
+        const requestError = new Error(payload?.message || `Request failed with ${response.status}`);
+        requestError.status = response.status;
+        throw requestError;
+      }
+
+      setManifest(payload?.update || null);
+      setForm({
+        version: '',
+        releaseNotes: '',
+        mandatory: false,
+        installerFile: null,
+      });
+      setMessage('Release published. POS clients will see it on their next update check.');
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+        return;
+      }
+
+      setError(requestError.message || 'Failed to publish release');
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">POS delivery</p>
+          <h1>Release Management</h1>
+          <p className="page-copy">Upload a new Windows installer and make it available to all POS machines through the existing updater flow.</p>
+        </div>
+      </div>
+
+      <DataState loading={loading} error={error} empty={false}>
+        <section className="content-grid two-columns">
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Publish update</p>
+                <h2>Upload installer</h2>
+              </div>
+            </div>
+
+            <form className="user-form" onSubmit={handlePublish}>
+              <FilterField label="Version">
+                <input
+                  value={form.version}
+                  onChange={(event) => updateForm('version', event.target.value)}
+                  placeholder="e.g. 1.2.3"
+                  required
+                />
+              </FilterField>
+              <FilterField label="Release notes">
+                <textarea
+                  rows="5"
+                  value={form.releaseNotes}
+                  onChange={(event) => updateForm('releaseNotes', event.target.value)}
+                  placeholder="What changed in this build?"
+                />
+              </FilterField>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={form.mandatory}
+                  onChange={(event) => updateForm('mandatory', event.target.checked)}
+                />
+                <span>Force POS terminals to install this update when detected.</span>
+              </label>
+              <label className="upload-field">
+                <span className="upload-label">Installer file</span>
+                <input
+                  type="file"
+                  accept=".exe"
+                  onChange={(event) => updateForm('installerFile', event.target.files?.[0] || null)}
+                  required
+                />
+                <span className="upload-meta">
+                  {form.installerFile ? `${form.installerFile.name} • ${formatBytes(form.installerFile.size)}` : 'Select the built Windows setup executable.'}
+                </span>
+              </label>
+              {message ? <div className="inline-note">{message}</div> : null}
+              <button type="submit" className="primary-button" disabled={publishing}>
+                {publishing ? 'Publishing...' : 'Publish release'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Current release</p>
+                <h2>Published manifest</h2>
+              </div>
+            </div>
+
+            {manifest ? (
+              <div className="release-summary">
+                <article className="release-highlight-card">
+                  <div>
+                    <p className="eyebrow">Live version</p>
+                    <h3>{manifest.version}</h3>
+                  </div>
+                  <span className={manifest.mandatory ? 'status-pill tone-red' : 'status-pill tone-green'}>
+                    {manifest.mandatory ? 'Mandatory' : 'Optional'}
+                  </span>
+                </article>
+
+                <div className="detail-list release-detail-list">
+                  <div>
+                    <span>Published</span>
+                    <strong>{formatDateTime(manifest.publishedAt)}</strong>
+                  </div>
+                  <div>
+                    <span>Installer</span>
+                    <strong>{manifest.fileName || 'Unknown'}</strong>
+                  </div>
+                  <div>
+                    <span>Size</span>
+                    <strong>{formatBytes(manifest.fileSize)}</strong>
+                  </div>
+                  <div>
+                    <span>Download</span>
+                    <strong>
+                      <a href={manifest.downloadUrl} target="_blank" rel="noreferrer">Download installer</a>
+                    </strong>
+                  </div>
+                  <div className="detail-list-full">
+                    <span>Release notes</span>
+                    <strong>{manifest.releaseNotes || 'No release notes provided.'}</strong>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="attention-empty">No installer has been published yet. Upload the first release to activate POS auto-updates.</div>
+            )}
+          </article>
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
 function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children }) {
   const currentMenu = MENU_ITEMS.find((item) => item.key === activeMenu);
 
@@ -1675,6 +1941,8 @@ function App() {
         return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'day-end-batches':
         return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'release-management':
+        return <ReleaseManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
       case 'user-management':
         return <UserManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
       case 'dashboard':
