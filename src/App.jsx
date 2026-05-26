@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
 const SESSION_STORAGE_KEY = 'recon-dashboard-session';
 const DAY_FILTERS = [7, 14, 30, 60];
+const ZRA_DAY_FILTERS = [1, 7, 14, 30, 60];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const MENU_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
@@ -58,6 +59,10 @@ function formatShortDate(value) {
   return new Intl.DateTimeFormat('en-GB', {
     dateStyle: 'medium',
   }).format(new Date(value));
+}
+
+function formatDayFilterLabel(days) {
+  return days === 1 ? 'Today' : `Last ${days} days`;
 }
 
 function titleizeDocumentType(value) {
@@ -890,14 +895,14 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
           <p className="page-copy">Monitor ZRA submission health per terminal, including pending, failed, printed, and QR artifact coverage.</p>
         </div>
         <div className="toolbar-row compact-toolbar">
-          {DAY_FILTERS.map((value) => (
+          {ZRA_DAY_FILTERS.map((value) => (
             <button
               key={value}
               type="button"
               className={value === days ? 'filter-chip active' : 'filter-chip'}
               onClick={() => setDays(value)}
             >
-              Last {value} days
+              {formatDayFilterLabel(value)}
             </button>
           ))}
         </div>
