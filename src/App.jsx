@@ -992,11 +992,21 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
   );
 }
 
-function AttentionQueueScreen({ token, onUnauthorized }) {
+function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
   const [days, setDays] = useState(14);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [pendingRequeueIds, setPendingRequeueIds] = useState([]);
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionError, setActionError] = useState('');
+  const { data, loading, error } = useReconApi(
+    '/api/recon/summary',
+    { days, limit: 20, refreshKey },
+    token,
+    true,
+    onUnauthorized
+  );
   const attentionBatches = useMemo(
     () => (data?.recentBatches || []).filter((row) => row.statusBucket !== 'completed'),
     [data]
@@ -1009,6 +1019,63 @@ function AttentionQueueScreen({ token, onUnauthorized }) {
   useEffect(() => {
     setPage(1);
   }, [days, pageSize]);
+
+  async function requeueBatch(batchId) {
+    if (!currentUser?.role || currentUser.role !== 'admin') {
+      setActionError('Only admin users may retry failed batches.');
+      return;
+    }
+
+    setActionMessage('');
+    setActionError('');
+    setPendingRequeueIds((current) => [...current, batchId]);
+
+    try {
+      await requestJson(`/api/recon/batches/${batchId}/requeue`, {
+        method: 'POST',
+        token,
+      });
+      setActionMessage(`Requeue requested for batch ${batchId}.`);
+      setRefreshKey((current) => current + 1);
+    } catch (requeueError) {
+      setActionError(requeueError.message || 'Failed to requeue batch.');
+    } finally {
+      setPendingRequeueIds((current) => current.filter((id) => id !== batchId));
+    }
+  }
+
+  async function requeueVisibleBatches() {
+    if (!currentUser?.role || currentUser.role !== 'admin') {
+      setActionError('Only admin users may retry failed batches.');
+      return;
+    }
+
+    setActionMessage('');
+    setActionError('');
+    const visibleIds = paginatedRows.rows.map((batch) => batch.id);
+    if (visibleIds.length === 0) {
+      setActionError('No visible batches available to retry.');
+      return;
+    }
+
+    setPendingRequeueIds(visibleIds);
+    try {
+      await Promise.all(
+        visibleIds.map(async (batchId) => {
+          await requestJson(`/api/recon/batches/${batchId}/requeue`, {
+            method: 'POST',
+            token,
+          });
+        })
+      );
+      setActionMessage(`Retry requested for ${visibleIds.length} visible batch(es).`);
+      setRefreshKey((current) => current + 1);
+    } catch (bulkError) {
+      setActionError(bulkError.message || 'Failed to retry visible batches.');
+    } finally {
+      setPendingRequeueIds([]);
+    }
+  }
 
   return (
     <section className="page-section">
@@ -1043,7 +1110,19 @@ function AttentionQueueScreen({ token, onUnauthorized }) {
           </div>
           <div className="toolbar-row compact-toolbar">
             <PageSizeField value={pageSize} onChange={setPageSize} />
+            {currentUser?.role === 'admin' && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={requeueVisibleBatches}
+                disabled={pendingRequeueIds.length > 0}
+              >
+                {pendingRequeueIds.length > 0 ? 'Retrying batches...' : 'Retry visible batches'}
+              </button>
+            )}
           </div>
+          {actionMessage && <div className="message success-message">{actionMessage}</div>}
+          {actionError && <div className="message error-message">{actionError}</div>}
           <div className="attention-list scroll-panel-list">
             {paginatedRows.rows.map((batch) => (
               <article key={batch.id} className="attention-item">
@@ -1053,10 +1132,23 @@ function AttentionQueueScreen({ token, onUnauthorized }) {
                   <p>
                     Branch {batch.branchId} • Terminal {batch.terminalId} • {formatNumber(batch.transactionCount)} transactions
                   </p>
+                  {batch.lastError && (
+                    <p className="attention-error">{batch.lastError}</p>
+                  )}
                 </div>
                 <div className="attention-meta">
                   <strong>{formatCurrency(batch.totalAmount)}</strong>
                   <span>{formatDateTime(batch.receivedAt)}</span>
+                  {currentUser?.role === 'admin' && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => requeueBatch(batch.id)}
+                      disabled={pendingRequeueIds.includes(batch.id)}
+                    >
+                      {pendingRequeueIds.includes(batch.id) ? 'Retrying…' : 'Retry'}
+                    </button>
+                  )}
                 </div>
               </article>
             ))}
@@ -1943,7 +2035,7 @@ function App() {
       case 'zra-compliance':
         return <ZraComplianceScreen token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'attention-queue':
-        return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+        return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'day-end-batches':
         return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'release-management':
