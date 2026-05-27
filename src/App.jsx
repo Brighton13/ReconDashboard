@@ -12,6 +12,7 @@ const MENU_ITEMS = [
   { key: 'zra-compliance', label: 'ZRA Compliance', path: '/zra-compliance' },
   { key: 'attention-queue', label: 'Attention Queue', path: '/attention-queue' },
   { key: 'day-end-batches', label: 'Day End Batches', path: '/day-end-batches' },
+  { key: 'credit-note-batches', label: 'Credit Notes', path: '/credit-note-batches' },
   { key: 'release-management', label: 'Release Management', path: '/release-management' },
   { key: 'user-management', label: 'User Management', path: '/user-management' },
 ];
@@ -2038,6 +2039,8 @@ function App() {
         return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'day-end-batches':
         return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} />;
+      case 'credit-note-batches':
+        return <BatchesScreen title="Credit Note Returns" eventType="credit_note.created" eyebrow="Returned document syncs" token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'release-management':
         return <ReleaseManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
       case 'user-management':
