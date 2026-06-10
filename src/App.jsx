@@ -999,6 +999,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
   const [pageSize, setPageSize] = useState(10);
   const [refreshKey, setRefreshKey] = useState(0);
   const [pendingRequeueIds, setPendingRequeueIds] = useState([]);
+  const [pendingReconcileIds, setPendingReconcileIds] = useState([]);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
   const { data, loading, error } = useReconApi(
@@ -1042,6 +1043,34 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
       setActionError(requeueError.message || 'Failed to requeue batch.');
     } finally {
       setPendingRequeueIds((current) => current.filter((id) => id !== batchId));
+    }
+  }
+
+  async function reconcileBatch(batchId) {
+    if (!currentUser?.role || currentUser.role !== 'admin') {
+      setActionError('Only admin users may reconcile batches with Sage.');
+      return;
+    }
+
+    setActionMessage('');
+    setActionError('');
+    setPendingReconcileIds((current) => [...current, batchId]);
+
+    try {
+      const result = await requestJson(`/api/recon/batches/${batchId}/reconcile`, {
+        method: 'POST',
+        token,
+      });
+      if (result?.success) {
+        setActionMessage(result.message || `Batch ${batchId} reconciled with Sage.`);
+        setRefreshKey((current) => current + 1);
+      } else {
+        setActionError(result?.message || `No matching Sage order found for batch ${batchId}.`);
+      }
+    } catch (reconcileError) {
+      setActionError(reconcileError.message || 'Failed to reconcile batch with Sage.');
+    } finally {
+      setPendingReconcileIds((current) => current.filter((id) => id !== batchId));
     }
   }
 
@@ -1148,6 +1177,16 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                       disabled={pendingRequeueIds.includes(batch.id)}
                     >
                       {pendingRequeueIds.includes(batch.id) ? 'Retrying…' : 'Retry'}
+                    </button>
+                  )}
+                  {currentUser?.role === 'admin' && batch.eventType === 'day_end.ready' && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => reconcileBatch(batch.id)}
+                      disabled={pendingReconcileIds.includes(batch.id)}
+                    >
+                      {pendingReconcileIds.includes(batch.id) ? 'Reconciling…' : 'Reconcile with Sage'}
                     </button>
                   )}
                 </div>
