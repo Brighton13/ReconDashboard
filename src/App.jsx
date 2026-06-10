@@ -371,10 +371,12 @@ function PageSizeField({ value, onChange }) {
   );
 }
 
-function SaleDetailsDialog({ sale, onClose }) {
+function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconcile }) {
   if (!sale) {
     return null;
   }
+
+  const showReconcile = canReconcile && !sale.postedToSage;
 
   return (
     <div className="dialog-backdrop" onClick={onClose}>
@@ -390,7 +392,19 @@ function SaleDetailsDialog({ sale, onClose }) {
             <p className="eyebrow">Sale Details</p>
             <h2 id="sale-details-title">Sale #{sale.saleId}</h2>
           </div>
-          <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+          <div className="dialog-header-actions">
+            {showReconcile && (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => onReconcile(sale)}
+                disabled={reconciling}
+              >
+                {reconciling ? 'Reconciling...' : 'Reconcile with Sage'}
+              </button>
+            )}
+            <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+          </div>
         </div>
 
         <article className="detail-reason-card">
@@ -1200,7 +1214,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
   );
 }
 
-function SalesScreen({ token, onUnauthorized }) {
+function SalesScreen({ token, onUnauthorized, currentUser }) {
   const [filters, setFilters] = useState({
     branchId: '',
     terminalId: '',
@@ -1208,11 +1222,16 @@ function SalesScreen({ token, onUnauthorized }) {
     endDate: '',
     page: 1,
     pageSize: 10,
+    refreshKey: 0,
   });
   const [selectedSale, setSelectedSale] = useState(null);
+  const [reconcilingIds, setReconcilingIds] = useState([]);
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionError, setActionError] = useState('');
   const { data, loading, error } = useReconApi('/api/recon/sales', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
   const filterMeta = data?.filters || {};
+  const isAdmin = currentUser?.role === 'admin';
 
   function updateFilter(key, value) {
     setFilters((current) => ({
@@ -1220,6 +1239,39 @@ function SalesScreen({ token, onUnauthorized }) {
       [key]: value,
       page: key === 'page' ? value : 1,
     }));
+  }
+
+  async function reconcileSale(sale) {
+    if (!isAdmin) {
+      setActionError('Only admin users may reconcile sales with Sage.');
+      return;
+    }
+
+    setActionMessage('');
+    setActionError('');
+    setReconcilingIds((current) => [...current, sale.id]);
+
+    try {
+      const result = await requestJson(`/api/recon/batches/${sale.syncEventId}/reconcile`, {
+        method: 'POST',
+        token,
+      });
+
+      if (result?.found === false || result?.success === false) {
+        setActionError(result?.message || `No Sage reference found for sale #${sale.saleId}.`);
+      } else {
+        setActionMessage(result?.message || `Sale #${sale.saleId} reconciled with Sage.`);
+        setSelectedSale(null);
+        setFilters((current) => ({ ...current, refreshKey: (current.refreshKey || 0) + 1 }));
+      }
+    } catch (reconcileError) {
+      if (reconcileError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setActionError(reconcileError.message || 'Failed to reconcile with Sage.');
+    } finally {
+      setReconcilingIds((current) => current.filter((id) => id !== sale.id));
+    }
   }
 
   return (
@@ -1271,6 +1323,11 @@ function SalesScreen({ token, onUnauthorized }) {
             </div>
             <p>{formatNumber(data?.pagination?.total || 0)} sales matching the selected filters.</p>
           </div>
+          {(actionMessage || actionError) && (
+            <p className={actionError ? 'action-feedback error' : 'action-feedback success'}>
+              {actionError || actionMessage}
+            </p>
+          )}
           <div className="table-wrap scroll-panel-table">
             <table className="data-table">
               <thead>
@@ -1304,9 +1361,21 @@ function SalesScreen({ token, onUnauthorized }) {
                     <td>{row.oeOrderNumber || 'Pending'}</td>
                     <td><StatusPill status={row.batchStatus} bucket={row.batchStatusBucket} /></td>
                     <td>
-                      <button type="button" className="secondary-button details-button" onClick={() => setSelectedSale(row)}>
-                        View details
-                      </button>
+                      <div className="action-cell">
+                        <button type="button" className="secondary-button details-button" onClick={() => setSelectedSale(row)}>
+                          View details
+                        </button>
+                        {!row.postedToSage && isAdmin && (
+                          <button
+                            type="button"
+                            className="primary-button details-button"
+                            onClick={() => reconcileSale(row)}
+                            disabled={reconcilingIds.includes(row.id)}
+                          >
+                            {reconcilingIds.includes(row.id) ? 'Reconciling...' : 'Reconcile with Sage'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1316,7 +1385,13 @@ function SalesScreen({ token, onUnauthorized }) {
           <Pagination pagination={data?.pagination} onPageChange={(page) => updateFilter('page', page)} />
         </section>
       </DataState>
-      <SaleDetailsDialog sale={selectedSale} onClose={() => setSelectedSale(null)} />
+      <SaleDetailsDialog
+        sale={selectedSale}
+        onClose={() => setSelectedSale(null)}
+        onReconcile={reconcileSale}
+        reconciling={selectedSale ? reconcilingIds.includes(selectedSale.id) : false}
+        canReconcile={isAdmin}
+      />
     </section>
   );
 }
@@ -2069,7 +2144,7 @@ function App() {
 
     switch (activeMenu) {
       case 'sales':
-        return <SalesScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+        return <SalesScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'terminal-visibility':
         return <TerminalVisibilityScreen token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'zra-compliance':

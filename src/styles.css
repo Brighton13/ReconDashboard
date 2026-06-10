@@ -581,6 +581,26 @@
     @apply px-3 py-2 text-sm;
   }
 
+  .action-cell {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .dialog-header-actions {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .action-feedback {
+    @apply mt-2 rounded-2xl px-4 py-3 text-sm font-medium;
+  }
+
+  .action-feedback.success {
+    @apply border border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .action-feedback.error {
+    @apply border border-rose-200 bg-rose-50 text-rose-700;
+  }
+
   .dialog-backdrop {
     @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm;
   }
