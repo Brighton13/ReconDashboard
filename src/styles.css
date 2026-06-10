@@ -601,6 +601,22 @@
     @apply border border-rose-200 bg-rose-50 text-rose-700;
   }
 
+  .sale-correction-card {
+    @apply grid gap-3;
+  }
+
+  .correction-actions {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .correction-link-row {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .correction-link-row input {
+    @apply min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm;
+  }
+
   .dialog-backdrop {
     @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm;
   }

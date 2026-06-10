@@ -372,6 +372,8 @@ function PageSizeField({ value, onChange }) {
 }
 
 function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconcile }) {
+  const [manualOrderNumber, setManualOrderNumber] = useState('');
+
   if (!sale) {
     return null;
   }
@@ -414,6 +416,42 @@ function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconci
           </div>
           <p>{sale.pendingReason || 'No additional detail is available for this sale.'}</p>
         </article>
+
+        {showReconcile && (
+          <article className="detail-reason-card sale-correction-card">
+            <strong>Correct this sale</strong>
+            <p>
+              If the day-end batch never posted, re-post it to create the Sage order. If the order already
+              exists in Sage under a different reference, enter its OE order number to link it.
+            </p>
+            <div className="correction-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => onReconcile(sale, { repost: true })}
+                disabled={reconciling}
+              >
+                {reconciling ? 'Working...' : 'Re-post batch to Sage'}
+              </button>
+            </div>
+            <div className="correction-link-row">
+              <input
+                type="text"
+                placeholder="Sage OE order number (e.g. ORD0000000000000020667)"
+                value={manualOrderNumber}
+                onChange={(event) => setManualOrderNumber(event.target.value)}
+              />
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => onReconcile(sale, { sageOrderNumber: manualOrderNumber.trim() })}
+                disabled={reconciling || manualOrderNumber.trim().length === 0}
+              >
+                Link order
+              </button>
+            </div>
+          </article>
+        )}
 
         <div className="detail-grid">
           <article className="detail-card">
@@ -1241,7 +1279,7 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
     }));
   }
 
-  async function reconcileSale(sale) {
+  async function reconcileSale(sale, options = {}) {
     if (!isAdmin) {
       setActionError('Only admin users may reconcile sales with Sage.');
       return;
@@ -1255,6 +1293,7 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
       const result = await requestJson(`/api/recon/batches/${sale.syncEventId}/reconcile`, {
         method: 'POST',
         token,
+        body: options,
       });
 
       if (result?.found === false || result?.success === false) {
@@ -1396,7 +1435,146 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
   );
 }
 
-function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized }) {
+function RepostPendingPanel({ token, onUnauthorized }) {
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [limit, setLimit] = useState(25);
+  const [busy, setBusy] = useState(false);
+  const [scan, setScan] = useState(null);
+  const [results, setResults] = useState(null);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  async function call(dryRun) {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    if (dryRun) {
+      setResults(null);
+    }
+
+    try {
+      const payload = await requestJson('/api/recon/batches/repost-pending', {
+        method: 'POST',
+        token,
+        body: { startDate, endDate, dryRun, limit },
+      });
+
+      if (dryRun) {
+        setScan(payload);
+        setMessage(`${payload.totalCandidates} batch(es) completed locally but were never posted to Sage.`);
+      } else {
+        setResults(payload);
+        const ok = (payload.results || []).filter((row) => row.success).length;
+        setMessage(`Re-posted ${ok} of ${payload.processed} batch(es). ${payload.remaining} still remaining.`);
+      }
+    } catch (callError) {
+      if (callError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setError(callError.message || 'Request failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel filter-panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Maintenance</p>
+          <h2>Re-post unposted batches</h2>
+        </div>
+        <p>Find day-end batches marked complete locally that never reached Sage, then re-post them.</p>
+      </div>
+      <div className="filter-grid four-columns">
+        <FilterField label="Start date">
+          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+        </FilterField>
+        <FilterField label="End date">
+          <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+        </FilterField>
+        <FilterField label="Max to re-post">
+          <input type="number" min="1" max="200" value={limit} onChange={(event) => setLimit(Number(event.target.value) || 1)} />
+        </FilterField>
+      </div>
+      <div className="correction-actions">
+        <button type="button" className="secondary-button" onClick={() => call(true)} disabled={busy}>
+          {busy ? 'Working...' : 'Scan'}
+        </button>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => call(false)}
+          disabled={busy || !scan || scan.totalCandidates === 0}
+        >
+          {busy ? 'Working...' : `Re-post ${scan ? Math.min(scan.totalCandidates, limit) : ''}`.trim()}
+        </button>
+      </div>
+      {(message || error) && (
+        <p className={error ? 'action-feedback error' : 'action-feedback success'}>{error || message}</p>
+      )}
+      {scan && scan.candidates && scan.candidates.length > 0 && !results && (
+        <div className="table-wrap scroll-panel-table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Batch</th>
+                <th>Branch</th>
+                <th>Terminal</th>
+                <th>Status</th>
+                <th>Pending sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scan.candidates.map((row) => (
+                <tr key={row.eventId}>
+                  <td>
+                    <div className="table-title">#{row.eventId}</div>
+                    <div className="table-subtitle">{row.idempotencyKey}</div>
+                  </td>
+                  <td>{row.branchId}</td>
+                  <td>{row.terminalId}</td>
+                  <td>{row.status}</td>
+                  <td>{formatNumber(row.pendingCount)} / {formatNumber(row.salesCount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {results && results.results && results.results.length > 0 && (
+        <div className="table-wrap scroll-panel-table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Batch</th>
+                <th>Branch</th>
+                <th>Result</th>
+                <th>Order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.results.map((row) => (
+                <tr key={row.eventId}>
+                  <td>
+                    <div className="table-title">#{row.eventId}</div>
+                    <div className="table-subtitle">{row.idempotencyKey}</div>
+                  </td>
+                  <td>{row.branchId}</td>
+                  <td>{row.success ? `Posted (${formatNumber(row.reconciledCount)})` : `Failed: ${row.message || ''}`}</td>
+                  <td>{row.orderNumber || 'N/A'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, currentUser }) {
   const [filters, setFilters] = useState(() => createBatchFilters(eventType));
   const { data, loading, error } = useReconApi('/api/recon/batches', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
@@ -1423,6 +1601,10 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized }) {
           <p className="page-copy">Filter and paginate batch activity by branch, terminal, status, and date.</p>
         </div>
       </div>
+
+      {eventType === 'day_end.ready' && currentUser?.role === 'admin' && (
+        <RepostPendingPanel token={token} onUnauthorized={onUnauthorized} />
+      )}
 
       <section className="panel filter-panel">
         <div className="filter-grid five-columns">
@@ -2152,9 +2334,9 @@ function App() {
       case 'attention-queue':
         return <AttentionQueueScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'day-end-batches':
-        return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} />;
+        return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'credit-note-batches':
-        return <BatchesScreen title="Credit Note Returns" eventType="credit_note.created" eyebrow="Returned document syncs" token={session.token} onUnauthorized={handleUnauthorized} />;
+        return <BatchesScreen title="Credit Note Returns" eventType="credit_note.created" eyebrow="Returned document syncs" token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'release-management':
         return <ReleaseManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
       case 'user-management':
