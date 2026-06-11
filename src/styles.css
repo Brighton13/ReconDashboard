@@ -345,6 +345,18 @@
     @apply md:justify-end;
   }
 
+  .dashboard-filters {
+    @apply flex flex-col gap-3 md:items-end;
+  }
+
+  .dashboard-filters .filter-field {
+    @apply min-w-[9rem];
+  }
+
+  .filter-caption {
+    @apply m-0 text-sm font-medium text-slate-500 md:text-right;
+  }
+
   .metric-grid,
   .content-grid,
   .filter-grid {

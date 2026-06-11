@@ -4,6 +4,13 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:400
 const SESSION_STORAGE_KEY = 'recon-dashboard-session';
 const DAY_FILTERS = [7, 14, 30, 60];
 const ZRA_DAY_FILTERS = [1, 7, 14, 30, 60];
+const DASHBOARD_PRESETS = [
+  { value: 1, label: 'Today' },
+  { value: 7, label: 'Last 7 days' },
+  { value: 14, label: 'Last 14 days' },
+  { value: 30, label: 'Last 30 days' },
+  { value: 60, label: 'Last 60 days' },
+];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const MENU_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
@@ -206,6 +213,48 @@ async function requestJson(path, { method = 'GET', token, body, signal } = {}) {
   }
 
   return payload;
+}
+
+async function downloadFile(path, { token, params } = {}) {
+  const query = params ? buildQueryString(params) : '';
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}${query ? `?${query}` : ''}`, { headers });
+
+  if (!response.ok) {
+    let message = `Request failed with ${response.status}`;
+    try {
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch (parseError) {
+      // Non-JSON error body; keep the default message.
+    }
+
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const fileName = match ? match[1] : 'download';
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function useReconApi(path, params, token, enabled = true, onUnauthorized) {
@@ -565,13 +614,35 @@ function LoginScreen({ onLogin, loading }) {
 
 function DashboardScreen({ token, onUnauthorized }) {
   const [days, setDays] = useState(14);
+  const [rangeDraft, setRangeDraft] = useState({ startDate: '', endDate: '' });
+  const [appliedRange, setAppliedRange] = useState({ startDate: '', endDate: '' });
   const [branchPage, setBranchPage] = useState(1);
   const [branchPageSize, setBranchPageSize] = useState(10);
   const [terminalPage, setTerminalPage] = useState(1);
   const [terminalPageSize, setTerminalPageSize] = useState(10);
   const [attentionPage, setAttentionPage] = useState(1);
   const [attentionPageSize, setAttentionPageSize] = useState(10);
-  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
+
+  const usingCustomRange = Boolean(appliedRange.startDate || appliedRange.endDate);
+  const summaryParams = usingCustomRange
+    ? { startDate: appliedRange.startDate, endDate: appliedRange.endDate, limit: 20 }
+    : { days, limit: 20 };
+  const { data, loading, error } = useReconApi('/api/recon/summary', summaryParams, token, true, onUnauthorized);
+
+  function selectPreset(value) {
+    setDays(value);
+    setRangeDraft({ startDate: '', endDate: '' });
+    setAppliedRange({ startDate: '', endDate: '' });
+  }
+
+  function applyCustomRange() {
+    setAppliedRange({ startDate: rangeDraft.startDate, endDate: rangeDraft.endDate });
+  }
+
+  function clearCustomRange() {
+    setRangeDraft({ startDate: '', endDate: '' });
+    setAppliedRange({ startDate: '', endDate: '' });
+  }
 
   const summary = data?.summary || {
     postedSalesCount: 0,
@@ -617,7 +688,7 @@ function DashboardScreen({ token, onUnauthorized }) {
     setBranchPage(1);
     setTerminalPage(1);
     setAttentionPage(1);
-  }, [days, branchPageSize, terminalPageSize, attentionPageSize]);
+  }, [days, appliedRange.startDate, appliedRange.endDate, branchPageSize, terminalPageSize, attentionPageSize]);
 
   return (
     <section className="page-section">
@@ -627,17 +698,54 @@ function DashboardScreen({ token, onUnauthorized }) {
           <h1>Dashboard</h1>
           <p className="page-copy">Summaries of reconciliation data across sales and day-end batch posting.</p>
         </div>
-        <div className="toolbar-row compact-toolbar">
-          {DAY_FILTERS.map((value) => (
+        <div className="dashboard-filters">
+          <div className="toolbar-row compact-toolbar">
+            {DASHBOARD_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className={!usingCustomRange && preset.value === days ? 'filter-chip active' : 'filter-chip'}
+                onClick={() => selectPreset(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="toolbar-row compact-toolbar">
+            <FilterField label="From">
+              <input
+                type="date"
+                value={rangeDraft.startDate}
+                max={rangeDraft.endDate || undefined}
+                onChange={(event) => setRangeDraft((current) => ({ ...current, startDate: event.target.value }))}
+              />
+            </FilterField>
+            <FilterField label="To">
+              <input
+                type="date"
+                value={rangeDraft.endDate}
+                min={rangeDraft.startDate || undefined}
+                onChange={(event) => setRangeDraft((current) => ({ ...current, endDate: event.target.value }))}
+              />
+            </FilterField>
             <button
-              key={value}
               type="button"
-              className={value === days ? 'filter-chip active' : 'filter-chip'}
-              onClick={() => setDays(value)}
+              className="primary-button"
+              onClick={applyCustomRange}
+              disabled={!rangeDraft.startDate && !rangeDraft.endDate}
             >
-              Last {value} days
+              Apply range
             </button>
-          ))}
+            {usingCustomRange && (
+              <button type="button" className="secondary-button" onClick={clearCustomRange}>Clear</button>
+            )}
+          </div>
+          {data?.filters && (
+            <p className="filter-caption">
+              Showing {String(data.filters.startDate || '').slice(0, 10)} to {String(data.filters.endDate || '').slice(0, 10)}
+              {usingCustomRange ? ' (custom range)' : ` (last ${data.filters.days} days)`}
+            </p>
+          )}
         </div>
       </div>
 
@@ -1266,6 +1374,8 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
   const [reconcilingIds, setReconcilingIds] = useState([]);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
   const { data, loading, error } = useReconApi('/api/recon/sales', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
   const filterMeta = data?.filters || {};
@@ -1277,6 +1387,30 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
       [key]: value,
       page: key === 'page' ? value : 1,
     }));
+  }
+
+  async function downloadSalesReport() {
+    setExportError('');
+    setExporting(true);
+
+    try {
+      await downloadFile('/api/recon/sales/export', {
+        token,
+        params: {
+          branchId: filters.branchId,
+          terminalId: filters.terminalId,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+        },
+      });
+    } catch (downloadError) {
+      if (downloadError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setExportError(downloadError.message || 'Failed to download the sales report.');
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function reconcileSale(sale, options = {}) {
@@ -1350,7 +1484,17 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
         </div>
         <div className="toolbar-row compact-toolbar">
           <PageSizeField value={filters.pageSize} onChange={(value) => updateFilter('pageSize', value)} />
+          <button
+            type="button"
+            className="primary-button"
+            onClick={downloadSalesReport}
+            disabled={exporting}
+            title="Download a clean sales report grouped by branch (Excel)"
+          >
+            {exporting ? 'Preparing report…' : 'Download Excel (by branch)'}
+          </button>
         </div>
+        {exportError && <p className="action-feedback error">{exportError}</p>}
       </section>
 
       <DataState loading={loading} error={error} empty={rows.length === 0}>
