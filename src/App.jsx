@@ -12,17 +12,55 @@ const DASHBOARD_PRESETS = [
   { value: 60, label: 'Last 60 days' },
 ];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
-const MENU_ITEMS = [
-  { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
-  { key: 'sales', label: 'Sales', path: '/sales' },
-  { key: 'terminal-visibility', label: 'Terminal Visibility', path: '/terminal-visibility' },
-  { key: 'zra-compliance', label: 'ZRA Compliance', path: '/zra-compliance' },
-  { key: 'attention-queue', label: 'Attention Queue', path: '/attention-queue' },
-  { key: 'day-end-batches', label: 'Day End Batches', path: '/day-end-batches' },
-  { key: 'credit-note-batches', label: 'Credit Notes', path: '/credit-note-batches' },
-  { key: 'release-management', label: 'Release Management', path: '/release-management' },
-  { key: 'user-management', label: 'User Management', path: '/user-management' },
+const MENU_GROUPS = [
+  {
+    key: 'overview',
+    label: 'Overview',
+    items: [
+      { key: 'dashboard', label: 'Dashboard', path: '/dashboard' },
+    ],
+  },
+  {
+    key: 'transactions',
+    label: 'Transactions',
+    items: [
+      { key: 'sales', label: 'Sales', path: '/sales' },
+      { key: 'credit-notes', label: 'Credit Notes', path: '/credit-notes' },
+    ],
+  },
+  {
+    key: 'batches',
+    label: 'Batches',
+    items: [
+      { key: 'day-end-batches', label: 'Day End Batches', path: '/day-end-batches' },
+      { key: 'credit-note-batches', label: 'Credit Note Batches', path: '/credit-note-batches' },
+    ],
+  },
+  {
+    key: 'compliance',
+    label: 'Compliance & Ops',
+    items: [
+      { key: 'zra-compliance', label: 'ZRA Compliance', path: '/zra-compliance' },
+      { key: 'terminal-visibility', label: 'Terminal Visibility', path: '/terminal-visibility' },
+      { key: 'attention-queue', label: 'Attention Queue', path: '/attention-queue' },
+    ],
+  },
+  {
+    key: 'administration',
+    label: 'Administration',
+    items: [
+      { key: 'release-management', label: 'Release Management', path: '/release-management' },
+      { key: 'user-management', label: 'User Management', path: '/user-management' },
+    ],
+  },
 ];
+
+const MENU_ITEMS = MENU_GROUPS.flatMap((group) => group.items);
+
+function getGroupKeyForMenu(menuKey) {
+  const group = MENU_GROUPS.find((entry) => entry.items.some((item) => item.key === menuKey));
+  return group?.key || MENU_GROUPS[0].key;
+}
 
 function formatNumber(value) {
   return new Intl.NumberFormat('en-US').format(Number(value || 0));
@@ -1579,6 +1617,158 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
   );
 }
 
+function CreditNotesScreen({ token, onUnauthorized }) {
+  const [filters, setFilters] = useState({
+    branchId: '',
+    terminalId: '',
+    startDate: '',
+    endDate: '',
+    page: 1,
+    pageSize: 10,
+    refreshKey: 0,
+  });
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const { data, loading, error } = useReconApi('/api/recon/credit-notes', filters, token, true, onUnauthorized);
+  const rows = data?.rows || [];
+  const filterMeta = data?.filters || {};
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({
+      ...current,
+      [key]: value,
+      page: key === 'page' ? value : 1,
+    }));
+  }
+
+  async function downloadCreditNoteReport() {
+    setExportError('');
+    setExporting(true);
+
+    try {
+      await downloadFile('/api/recon/credit-notes/export', {
+        token,
+        params: {
+          branchId: filters.branchId,
+          terminalId: filters.terminalId,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+        },
+      });
+    } catch (downloadError) {
+      if (downloadError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setExportError(downloadError.message || 'Failed to download the credit note report.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <section className="page-section">
+      <div className="page-hero compact-hero">
+        <div>
+          <p className="eyebrow">Returned documents</p>
+          <h1>Credit Notes</h1>
+          <p className="page-copy">List all returned credit notes with branch, terminal, date, reason, value, and Sage posting status.</p>
+        </div>
+      </div>
+
+      <section className="panel filter-panel">
+        <div className="filter-grid four-columns">
+          <FilterField label="Branch">
+            <select value={filters.branchId} onChange={(event) => updateFilter('branchId', event.target.value)}>
+              <option value="">All branches</option>
+              {(filterMeta.branchOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Terminal">
+            <select value={filters.terminalId} onChange={(event) => updateFilter('terminalId', event.target.value)}>
+              <option value="">All terminals</option>
+              {(filterMeta.terminalOptions || []).map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Start date">
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter('startDate', event.target.value)} />
+          </FilterField>
+          <FilterField label="End date">
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter('endDate', event.target.value)} />
+          </FilterField>
+        </div>
+        <div className="toolbar-row compact-toolbar">
+          <PageSizeField value={filters.pageSize} onChange={(value) => updateFilter('pageSize', value)} />
+          <button
+            type="button"
+            className="primary-button"
+            onClick={downloadCreditNoteReport}
+            disabled={exporting}
+            title="Download a clean credit note report grouped by branch (Excel)"
+          >
+            {exporting ? 'Preparing report…' : 'Download Excel (by branch)'}
+          </button>
+        </div>
+        {exportError && <p className="action-feedback error">{exportError}</p>}
+      </section>
+
+      <DataState loading={loading} error={error} empty={rows.length === 0}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Credit note ledger</p>
+              <h2>All returned credit notes in scope</h2>
+            </div>
+            <p>{formatNumber(data?.pagination?.total || 0)} credit notes matching the selected filters.</p>
+          </div>
+          <div className="table-wrap scroll-panel-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Credit Note</th>
+                  <th>Branch</th>
+                  <th>Terminal</th>
+                  <th>Date</th>
+                  <th>Reason</th>
+                  <th>Payment</th>
+                  <th>Amount</th>
+                  <th>Sage Doc</th>
+                  <th>Batch Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <div className="table-title">Receipt {row.receiptNumber || 'N/A'}</div>
+                      <div className="table-subtitle">{row.originalSaleId ? `From sale #${row.originalSaleId}` : 'No linked sale'}</div>
+                    </td>
+                    <td>{row.branchId}</td>
+                    <td>{row.terminalId}</td>
+                    <td>
+                      <div className="table-title">{formatShortDate(row.creditNoteDate)}</div>
+                      <div className="table-subtitle">{formatDateTime(row.batchReceivedAt)}</div>
+                    </td>
+                    <td>{row.reason || 'N/A'}</td>
+                    <td>{row.paymentMethod || 'N/A'}</td>
+                    <td>{formatCurrency(row.amount)}</td>
+                    <td>{row.sageDocumentNumber || 'Pending'}</td>
+                    <td><StatusPill status={row.batchStatus} bucket={row.batchStatusBucket} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination pagination={data?.pagination} onPageChange={(page) => updateFilter('page', page)} />
+        </section>
+      </DataState>
+    </section>
+  );
+}
+
 function RepostPendingPanel({ token, onUnauthorized }) {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -2319,6 +2509,16 @@ function ReleaseManagementScreen({ token, currentUser, onUnauthorized }) {
 
 function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children }) {
   const currentMenu = MENU_ITEMS.find((item) => item.key === activeMenu);
+  const [openGroups, setOpenGroups] = useState(() => ({ [getGroupKeyForMenu(activeMenu)]: true }));
+
+  useEffect(() => {
+    const groupKey = getGroupKeyForMenu(activeMenu);
+    setOpenGroups((current) => (current[groupKey] ? current : { ...current, [groupKey]: true }));
+  }, [activeMenu]);
+
+  function toggleGroup(groupKey) {
+    setOpenGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
+  }
 
   return (
     <div className="workspace-shell">
@@ -2328,16 +2528,37 @@ function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children })
           <h2>Finance workspace</h2>
         </div>
         <nav className="sidebar-nav">
-          {MENU_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={item.key === activeMenu ? 'sidebar-link active' : 'sidebar-link'}
-              onClick={() => onMenuChange(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {MENU_GROUPS.map((group) => {
+            const isOpen = Boolean(openGroups[group.key]);
+            const hasActive = group.items.some((item) => item.key === activeMenu);
+            return (
+              <div key={group.key} className={`sidebar-group${isOpen ? ' open' : ''}`}>
+                <button
+                  type="button"
+                  className={`sidebar-group-header${hasActive ? ' has-active' : ''}`}
+                  onClick={() => toggleGroup(group.key)}
+                  aria-expanded={isOpen}
+                >
+                  <span>{group.label}</span>
+                  <span className="sidebar-group-caret" aria-hidden="true">{isOpen ? '\u2212' : '+'}</span>
+                </button>
+                {isOpen && (
+                  <div className="sidebar-group-items">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        className={item.key === activeMenu ? 'sidebar-link active' : 'sidebar-link'}
+                        onClick={() => onMenuChange(item.key)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
         <div className="sidebar-footer">
           <strong>{currentUser.fullName}</strong>
@@ -2471,6 +2692,8 @@ function App() {
     switch (activeMenu) {
       case 'sales':
         return <SalesScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
+      case 'credit-notes':
+        return <CreditNotesScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'terminal-visibility':
         return <TerminalVisibilityScreen token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'zra-compliance':
@@ -2480,7 +2703,7 @@ function App() {
       case 'day-end-batches':
         return <BatchesScreen title="Day End Batches" eventType="day_end.ready" eyebrow="Batch operations" token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'credit-note-batches':
-        return <BatchesScreen title="Credit Note Returns" eventType="credit_note.created" eyebrow="Returned document syncs" token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
+        return <BatchesScreen title="Credit Note Returns" eventType="credit_note_batch.ready" eyebrow="Returned document syncs" token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'release-management':
         return <ReleaseManagementScreen token={session.token} currentUser={session.user} onUnauthorized={handleUnauthorized} />;
       case 'user-management':

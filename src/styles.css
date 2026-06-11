@@ -288,6 +288,26 @@
     @apply border-cyan-400/25 bg-cyan-500/18 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_14px_32px_rgba(8,145,178,0.18)];
   }
 
+  .sidebar-group {
+    @apply grid gap-1.5;
+  }
+
+  .sidebar-group-header {
+    @apply flex w-full items-center justify-between rounded-2xl px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 transition duration-150 ease-out hover:bg-white/5 hover:text-slate-200;
+  }
+
+  .sidebar-group-header.has-active {
+    @apply text-cyan-200;
+  }
+
+  .sidebar-group-caret {
+    @apply ml-2 text-base font-semibold leading-none text-slate-500;
+  }
+
+  .sidebar-group-items {
+    @apply grid gap-1.5 pl-2;
+  }
+
   .sidebar-footer {
     @apply grid gap-1 rounded-[1.5rem] border border-white/8 bg-white/6 p-4;
   }
