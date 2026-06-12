@@ -1069,6 +1069,7 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
     submittedCount: 0,
     pendingCount: 0,
     failedCount: 0,
+    missingSdcCount: 0,
     receiptPrintedCount: 0,
     qrArtifactCount: 0,
     complianceRate: 0,
@@ -1091,7 +1092,7 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
         <div>
           <p className="eyebrow">ZRA compliance</p>
           <h1>Terminal compliance</h1>
-          <p className="page-copy">Monitor ZRA submission health per terminal, including pending, failed, printed, and QR artifact coverage.</p>
+          <p className="page-copy">ZRA compliance from day-end batch sales (same pool as the dashboard). Submitted means SDC id and ZRA receipt number are present.</p>
         </div>
         <div className="toolbar-row compact-toolbar">
           {ZRA_DAY_FILTERS.map((value) => (
@@ -1111,21 +1112,21 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
         <>
           <section className="metric-grid">
             <MetricCard
-              label="ZRA Submitted"
+              label="With SDC Data"
               value={formatNumber(summary.submittedCount)}
-              meta={`${formatNumber(summary.totalSalesCount)} sales tracked`}
+              meta={`${formatNumber(summary.totalSalesCount)} sales in day-end batches`}
               accent="accent-green"
             />
             <MetricCard
-              label="ZRA Pending"
-              value={formatNumber(summary.pendingCount)}
-              meta="Sales still waiting for ZRA submission"
+              label="Missing SDC"
+              value={formatNumber(summary.missingSdcCount)}
+              meta="Sales without SDC id / ZRA receipt number"
               accent="accent-amber"
             />
             <MetricCard
               label="ZRA Failed"
               value={formatNumber(summary.failedCount)}
-              meta="Sales that need retry or manual review"
+              meta={`${formatNumber(summary.pendingCount)} still pending ZRA`}
               accent="accent-red"
             />
             <MetricCard
@@ -1153,7 +1154,8 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
                     <th>Branch</th>
                     <th>Terminal</th>
                     <th>Sales</th>
-                    <th>Submitted</th>
+                    <th>With SDC</th>
+                    <th>Missing SDC</th>
                     <th>Pending</th>
                     <th>Failed</th>
                     <th>Printed</th>
@@ -1171,6 +1173,7 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
                       </td>
                       <td>{formatNumber(row.totalSalesCount)}</td>
                       <td>{formatNumber(row.submittedCount)}</td>
+                      <td>{formatNumber(row.missingSdcCount || 0)}</td>
                       <td>{formatNumber(row.pendingCount)}</td>
                       <td>{formatNumber(row.failedCount)}</td>
                       <td>{formatNumber(row.receiptPrintedCount)}</td>
