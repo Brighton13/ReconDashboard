@@ -1092,7 +1092,7 @@ function ZraComplianceScreen({ token, onUnauthorized }) {
         <div>
           <p className="eyebrow">ZRA compliance</p>
           <h1>Terminal compliance</h1>
-          <p className="page-copy">ZRA compliance from day-end batch sales (same pool as the dashboard). Submitted means SDC id and ZRA receipt number are present.</p>
+          <p className="page-copy">ZRA compliance from day-end batch sales (same pool as the dashboard). With SDC data means fiscal fields were found in sync payloads — SDC id and receipt number, fiscal invoice reference (INV/CRN), or QR/signature artifacts.</p>
         </div>
         <div className="toolbar-row compact-toolbar">
           {ZRA_DAY_FILTERS.map((value) => (
