@@ -1015,9 +1015,13 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
   const summary = data?.summary || { totalTerminals: 0, syncedCount: 0, missingCount: 0 };
 
   useEffect(() => {
-    const refreshTimer = window.setInterval(() => setRefreshTick((current) => current + 1), 60_000);
+    const refreshTimer = window.setInterval(() => setRefreshTick((current) => current + 1), 10 * 60_000);
     return () => window.clearInterval(refreshTimer);
   }, []);
+
+  function refreshNow() {
+    setRefreshTick((current) => current + 1);
+  }
 
   return (
     <section className="page-section">
@@ -1030,7 +1034,10 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
         <div className="sync-legend" aria-label="Terminal status legend">
           <span><i className="legend-dot synced" /> Sent today</span>
           <span><i className="legend-dot missing" /> Not sent today</span>
-          <small>Updates every minute</small>
+          <button type="button" className="secondary-button" onClick={refreshNow} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh now'}
+          </button>
+          <small>Updates automatically every 10 minutes</small>
         </div>
       </div>
 
