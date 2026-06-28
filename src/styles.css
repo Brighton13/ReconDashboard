@@ -378,6 +378,7 @@
   }
 
   .metric-grid,
+  .terminal-summary-grid,
   .content-grid,
   .filter-grid {
     @apply grid gap-4;
@@ -385,6 +386,83 @@
 
   .metric-grid {
     @apply md:grid-cols-2 2xl:grid-cols-4;
+  }
+
+  .terminal-summary-grid {
+    @apply md:grid-cols-3;
+  }
+
+  .sync-legend {
+    @apply flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-600 md:justify-end;
+  }
+
+  .sync-legend > span {
+    @apply inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-2;
+  }
+
+  .sync-legend small {
+    @apply w-full text-xs font-medium text-slate-400 md:text-right;
+  }
+
+  .legend-dot,
+  .terminal-status-dot {
+    @apply h-2.5 w-2.5 rounded-full;
+  }
+
+  .legend-dot.synced {
+    @apply bg-emerald-500;
+  }
+
+  .legend-dot.missing {
+    @apply bg-rose-500;
+  }
+
+  .terminal-status-grid {
+    @apply mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6;
+  }
+
+  .terminal-status-card {
+    @apply relative min-h-40 overflow-hidden rounded-[1.35rem] border p-4 shadow-sm transition duration-150 hover:-translate-y-0.5 hover:shadow-md;
+  }
+
+  .terminal-status-card.synced {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-950;
+  }
+
+  .terminal-status-card.missing {
+    @apply border-rose-200 bg-rose-50 text-rose-950;
+  }
+
+  .terminal-card-status {
+    @apply flex items-center gap-2 text-[0.65rem] font-extrabold uppercase tracking-[0.14em];
+  }
+
+  .terminal-status-card.synced .terminal-card-status {
+    @apply text-emerald-700;
+  }
+
+  .terminal-status-card.missing .terminal-card-status {
+    @apply text-rose-700;
+  }
+
+  .terminal-status-card.synced .terminal-status-dot {
+    @apply bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.14)];
+  }
+
+  .terminal-status-card.missing .terminal-status-dot {
+    @apply bg-rose-500 shadow-[0_0_0_4px_rgba(244,63,94,0.14)];
+  }
+
+  .terminal-status-card h3 {
+    @apply mb-1 mt-7 text-lg font-extrabold leading-tight;
+  }
+
+  .terminal-status-card p {
+    @apply m-0 text-xs font-bold uppercase tracking-[0.12em] opacity-65;
+  }
+
+  .terminal-status-card small {
+    @apply mt-3 block text-xs font-medium leading-5 opacity-70;
   }
 
   .content-grid.two-columns {

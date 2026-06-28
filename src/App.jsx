@@ -1003,57 +1003,78 @@ function DashboardScreen({ token, onUnauthorized }) {
 }
 
 function TerminalVisibilityScreen({ token, onUnauthorized }) {
-  const [days, setDays] = useState(14);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const { data, loading, error } = useReconApi('/api/recon/summary', { days, limit: 20 }, token, true, onUnauthorized);
-  const terminalPerformance = data?.terminalPerformance || [];
-  const paginatedRows = useMemo(
-    () => paginateClientRows(terminalPerformance, page, pageSize),
-    [page, pageSize, terminalPerformance]
+  const [refreshTick, setRefreshTick] = useState(0);
+  const { data, loading, error } = useReconApi(
+    '/api/recon/terminal-sync-status',
+    { refresh: refreshTick },
+    token,
+    true,
+    onUnauthorized
   );
+  const terminals = data?.terminals || [];
+  const summary = data?.summary || { totalTerminals: 0, syncedCount: 0, missingCount: 0 };
 
   useEffect(() => {
-    setPage(1);
-  }, [days, pageSize]);
+    const refreshTimer = window.setInterval(() => setRefreshTick((current) => current + 1), 60_000);
+    return () => window.clearInterval(refreshTimer);
+  }, []);
 
   return (
     <section className="page-section">
       <div className="page-hero compact-hero">
         <div>
-          <p className="eyebrow">Terminal visibility</p>
-          <h1>Sales by terminal</h1>
-          <p className="page-copy">Review terminal-level throughput, posted volume, and pending work across the selected period.</p>
+          <p className="eyebrow">Daily sync monitor</p>
+          <h1>Terminal check-in</h1>
+          <p className="page-copy">See which shop terminals have sent data to Central Sync today and quickly follow up on those still missing.</p>
         </div>
-        <div className="toolbar-row compact-toolbar">
-          {DAY_FILTERS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={value === days ? 'filter-chip active' : 'filter-chip'}
-              onClick={() => setDays(value)}
-            >
-              Last {value} days
-            </button>
-          ))}
+        <div className="sync-legend" aria-label="Terminal status legend">
+          <span><i className="legend-dot synced" /> Sent today</span>
+          <span><i className="legend-dot missing" /> Not sent today</span>
+          <small>Updates every minute</small>
         </div>
       </div>
 
-      <DataState loading={loading} error={error} empty={terminalPerformance.length === 0}>
-        <section className="panel">
+      <DataState loading={loading} error={error} empty={terminals.length === 0}>
+        <>
+          <section className="terminal-summary-grid">
+            <MetricCard label="Known terminals" value={formatNumber(summary.totalTerminals)} meta="All terminals seen by Central Sync" />
+            <MetricCard label="Sent today" value={formatNumber(summary.syncedCount)} meta="No follow-up required" accent="accent-green" />
+            <MetricCard label="Not sent today" value={formatNumber(summary.missingCount)} meta="Shops to contact" accent="accent-red" />
+          </section>
+
+          <section className="panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Terminal register</p>
-              <h2>Performance by terminal</h2>
+              <p className="eyebrow">Today's status</p>
+              <h2>All terminals</h2>
             </div>
-            <p>{formatNumber(paginatedRows.pagination.total)} terminals in the selected window.</p>
+            <p>{formatNumber(summary.syncedCount)} of {formatNumber(summary.totalTerminals)} terminals have checked in.</p>
           </div>
-          <div className="toolbar-row compact-toolbar">
-            <PageSizeField value={pageSize} onChange={setPageSize} />
+
+          <div className="terminal-status-grid">
+            {terminals.map((terminal) => (
+              <article
+                key={terminal.key}
+                className={`terminal-status-card ${terminal.sentToday ? 'synced' : 'missing'}`}
+              >
+                <div className="terminal-card-status">
+                  <span className="terminal-status-dot" aria-hidden="true" />
+                  <span>{terminal.sentToday ? 'Sent today' : 'Not sent today'}</span>
+                </div>
+                <h3>{terminal.terminalName}</h3>
+                <p>Branch {terminal.branchId}</p>
+                <small>
+                  {terminal.sentToday
+                    ? `Last received ${formatDateTime(terminal.lastReceivedAt)}`
+                    : terminal.lastReceivedAt
+                      ? `Last received ${formatDateTime(terminal.lastReceivedAt)}`
+                      : 'No data received yet'}
+                </small>
+              </article>
+            ))}
           </div>
-          <PerformanceList rows={paginatedRows.rows} valueKey="salesCount" className="scroll-panel-list" />
-          <Pagination pagination={paginatedRows.pagination} onPageChange={setPage} />
-        </section>
+          </section>
+        </>
       </DataState>
     </section>
   );
