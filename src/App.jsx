@@ -1963,7 +1963,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
         <div>
           <p className="eyebrow">{eyebrow}</p>
           <h1>{title}</h1>
-          <p className="page-copy">Filter and paginate batch activity by branch, terminal, status, and date.</p>
+          <p className="page-copy">Filter and paginate batch activity by branch, terminal, status, and business date.</p>
         </div>
       </div>
 
@@ -2030,6 +2030,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                   <th>Value</th>
                   <th>Exported</th>
                   <th>Retries</th>
+                  <th>Business date</th>
                   <th>Received</th>
                 </tr>
               </thead>
@@ -2047,6 +2048,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                     <td>{formatCurrency(row.totalAmount)}</td>
                     <td>{formatNumber(row.exportedCount)}</td>
                     <td>{formatNumber(row.retryCount)}</td>
+                    <td>{formatShortDate(row.batchDate)}</td>
                     <td>{formatDateTime(row.receivedAt)}</td>
                   </tr>
                 ))}
