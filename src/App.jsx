@@ -707,14 +707,184 @@ function LoginScreen({ onLogin, loading }) {
   );
 }
 
+function PaginatedBarChart({ rows, valueKey, valueFormatter = formatNumber, emptyLabel = 'No chart data available', type }) {
+  const [search, setSearch] = useState('');
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const query = search.trim().toLowerCase();
+  const filteredRows = query
+    ? rows.filter((row) => `${row.branchId || ''} ${row.terminalId || ''} ${row.label || ''}`.toLowerCase().includes(query))
+    : rows;
+  const totalPages = Math.max(Math.ceil(filteredRows.length / pageSize), 1);
+  const currentPage = Math.min(page, totalPages);
+  const chartRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const maxValue = Math.max(...chartRows.map((row) => Number(row[valueKey] || 0)), 1);
+
+  useEffect(() => setPage(1), [search, pageSize, rows]);
+
+  return (
+    <div className="paginated-chart-shell">
+      <div className="chart-toolbar">
+        <div><strong>{formatNumber(filteredRows.length)}</strong><span>{type === 'terminal' ? 'terminals' : 'branches'} available</span></div>
+        <div className="chart-controls">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Find ${type === 'terminal' ? 'branch or terminal' : 'branch'} ID`} aria-label={`Search ${type} graph`} />
+          <label><span>Bars</span><select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[5, 10, 15, 20].map((size) => <option key={size} value={size}>{size}</option>)}</select></label>
+        </div>
+      </div>
+      {!chartRows.length ? <div className="chart-empty">{query ? 'No IDs match your search' : emptyLabel}</div> : (
+        <div className="vertical-chart" style={{ '--bar-count': chartRows.length }} role="img" aria-label={`${type} performance bar chart, page ${currentPage} of ${totalPages}`}>
+          {chartRows.map((row, index) => {
+            const value = Number(row[valueKey] || 0);
+            const height = Math.max((value / maxValue) * 100, 2);
+            const branchId = row.branchId || row.key;
+            return (
+              <div className="vertical-chart-item" key={row.key}>
+                <div className="chart-hover-card">
+                  <strong>{type === 'terminal' ? `Terminal ${row.terminalId}` : `Branch ${branchId}`}</strong>
+                  {type === 'terminal' ? <span>Branch ID: {branchId}</span> : null}
+                  <span>{valueKey === 'totalAmount' ? 'Revenue' : 'Sales'}: {valueFormatter(value)}</span>
+                  <span>Sales: {formatNumber(row.salesCount)}</span>
+                  <span>Posted: {formatNumber(row.postedSalesCount)}</span>
+                  <span>Pending: {formatNumber(row.pendingSalesCount)}</span>
+                  <span>Batches: {formatNumber(row.batches)}</span>
+                </div>
+                <div className="vertical-bar-track"><div className={`vertical-bar-fill chart-color-${index % 5}`} style={{ height: `${height}%` }} /></div>
+                <div className="vertical-bar-label">
+                  <strong>{type === 'terminal' ? `T${row.terminalId}` : `B${branchId}`}</strong>
+                  {type === 'terminal' ? <span>B{branchId}</span> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {filteredRows.length > 0 ? <div className="chart-pagination">
+        <button type="button" className="pagination-button" disabled={currentPage <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
+        <span>Page {currentPage} of {totalPages} · Showing {chartRows.length} of {formatNumber(filteredRows.length)}</span>
+        <button type="button" className="pagination-button" disabled={currentPage >= totalPages} onClick={() => setPage((value) => value + 1)}>Next</button>
+      </div> : null}
+    </div>
+  );
+}
+
+function AttentionBarChart({ rows }) {
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(Math.ceil(rows.length / pageSize), 1);
+  const currentPage = Math.min(page, totalPages);
+  const chartRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const maxValue = Math.max(...chartRows.map((row) => Number(row.totalAmount || 0)), 1);
+
+  useEffect(() => setPage(1), [pageSize, rows]);
+
+  if (!rows.length) return <div className="chart-empty">No pending or failed batches in the selected window.</div>;
+
+  return (
+    <div className="paginated-chart-shell attention-chart-shell">
+      <div className="chart-toolbar">
+        <div><strong>{formatNumber(rows.length)}</strong><span>batches require review</span></div>
+        <div className="chart-controls"><label><span>Bars</span><select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[5, 10, 15, 20].map((size) => <option key={size} value={size}>{size}</option>)}</select></label></div>
+      </div>
+      <div className="vertical-chart" style={{ '--bar-count': chartRows.length }} role="img" aria-label={`Attention queue bar chart, page ${currentPage} of ${totalPages}`}>
+        {chartRows.map((batch) => {
+          const height = Math.max((Number(batch.totalAmount || 0) / maxValue) * 100, 2);
+          return (
+            <div className="vertical-chart-item" key={batch.id}>
+              <div className="chart-hover-card">
+                <strong>{batch.label}</strong>
+                <span>Status: {batch.status}</span>
+                <span>Branch ID: {batch.branchId}</span>
+                <span>Terminal ID: {batch.terminalId}</span>
+                <span>Value: {formatCurrency(batch.totalAmount)}</span>
+                <span>Transactions: {formatNumber(batch.transactionCount)}</span>
+                <span>Received: {formatDateTime(batch.receivedAt)}</span>
+              </div>
+              <div className="vertical-bar-track"><div className={`vertical-bar-fill attention-bar-${batch.statusBucket}`} style={{ height: `${height}%` }} /></div>
+              <div className="vertical-bar-label"><strong>B{batch.branchId}</strong><span>T{batch.terminalId}</span></div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="attention-chart-legend"><span><i className="legend-pending" />Pending</span><span><i className="legend-failed" />Failed</span></div>
+      <div className="chart-pagination">
+        <button type="button" className="pagination-button" disabled={currentPage <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
+        <span>Page {currentPage} of {totalPages} · Showing {chartRows.length} of {formatNumber(rows.length)}</span>
+        <button type="button" className="pagination-button" disabled={currentPage >= totalPages} onClick={() => setPage((value) => value + 1)}>Next</button>
+      </div>
+    </div>
+  );
+}
+
+function DonutChart({ rows }) {
+  const colors = ['#0891b2', '#0f172a', '#f59e0b', '#10b981', '#8b5cf6', '#f43f5e'];
+  const total = rows.reduce((sum, row) => sum + Number(row.value || 0), 0);
+  let cursor = 0;
+  const gradient = rows.length && total
+    ? rows.map((row, index) => {
+      const start = cursor;
+      cursor += (Number(row.value || 0) / total) * 100;
+      return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+    }).join(', ')
+    : '#e2e8f0 0% 100%';
+
+  return (
+    <div className="donut-layout">
+      <div className="donut-chart" style={{ background: `conic-gradient(${gradient})` }} role="img" aria-label={`Document mix, ${formatNumber(total)} total transactions`}>
+        <div className="donut-center"><strong>{formatNumber(total)}</strong><span>Total</span></div>
+      </div>
+      <div className="chart-legend">
+        {rows.map((row, index) => (
+          <div key={row.key}><span className="legend-swatch" style={{ backgroundColor: colors[index % colors.length] }} /><span>{titleizeDocumentType(row.key)}</span><strong>{formatNumber(row.value)}</strong></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReconciliationFlow({ summary }) {
+  const total = Number(summary.totalSalesCount || 0);
+  const posted = Number(summary.postedSalesCount || 0);
+  const pending = Number(summary.pendingSalesCount || 0);
+  const postedWidth = total ? (posted / total) * 100 : 0;
+  const pendingWidth = total ? (pending / total) * 100 : 0;
+
+  return (
+    <div className="reconciliation-flow">
+      <div className="flow-total">
+        <span>Sales received from POS</span>
+        <strong>{formatNumber(total)}</strong>
+        <small>Unique sales captured in day-end batches</small>
+      </div>
+      <div className="flow-bar" aria-label={`${posted} posted and ${pending} pending out of ${total} sales`}>
+        <div className="flow-posted" style={{ width: `${postedWidth}%` }} />
+        <div className="flow-pending" style={{ width: `${pendingWidth}%` }} />
+      </div>
+      <div className="flow-breakdown">
+        <div><i className="flow-dot posted" /><span>Posted to Sage</span><strong>{formatNumber(posted)}</strong><small>{total ? `${postedWidth.toFixed(1)}% of received sales` : 'No sales received'}</small></div>
+        <div><i className="flow-dot pending" /><span>Still pending</span><strong>{formatNumber(pending)}</strong><small>{total ? `${pendingWidth.toFixed(1)}% of received sales` : 'No sales received'}</small></div>
+      </div>
+      <div className="credit-note-summary">
+        <div><span>Credit notes received</span><strong>{formatNumber(summary.totalCreditNotesCount)}</strong></div>
+        <div><span>Returned value</span><strong>{formatCurrency(summary.totalCreditNotesValue)}</strong></div>
+      </div>
+      <p className="flow-explainer">Received, posted, and pending are stages of the same sales flow—not separate document types.</p>
+    </div>
+  );
+}
+
+function ProgressRing({ value, label }) {
+  const safeValue = Math.min(Math.max(Number(value || 0), 0), 100);
+  return (
+    <div className="progress-ring" style={{ '--progress': `${safeValue * 3.6}deg` }}>
+      <div><strong>{safeValue.toFixed(1)}%</strong><span>{label}</span></div>
+    </div>
+  );
+}
+
 function DashboardScreen({ token, onUnauthorized }) {
   const [days, setDays] = useState(14);
   const [rangeDraft, setRangeDraft] = useState({ startDate: '', endDate: '' });
   const [appliedRange, setAppliedRange] = useState({ startDate: '', endDate: '' });
-  const [branchPage, setBranchPage] = useState(1);
-  const [branchPageSize, setBranchPageSize] = useState(10);
-  const [terminalPage, setTerminalPage] = useState(1);
-  const [terminalPageSize, setTerminalPageSize] = useState(10);
   const [attentionPage, setAttentionPage] = useState(1);
   const [attentionPageSize, setAttentionPageSize] = useState(10);
 
@@ -755,35 +925,21 @@ function DashboardScreen({ token, onUnauthorized }) {
   const terminalPerformance = data?.terminalPerformance || [];
   const recentBatches = data?.recentBatches || [];
   const recentExports = data?.recentExports || [];
-  const documentCards = useMemo(() => {
-    const rows = summary?.documentSummary || {};
-    return Object.entries(rows)
-      .map(([key, value]) => ({ key, value }))
-      .sort((left, right) => right.value - left.value);
-  }, [summary]);
-
   const attentionBatches = useMemo(
     () => recentBatches.filter((row) => row.statusBucket !== 'completed'),
     [recentBatches]
   );
-  const paginatedBranchPerformance = useMemo(
-    () => paginateClientRows(branchPerformance, branchPage, branchPageSize),
-    [branchPage, branchPageSize, branchPerformance]
-  );
-  const paginatedTerminalPerformance = useMemo(
-    () => paginateClientRows(terminalPerformance, terminalPage, terminalPageSize),
-    [terminalPage, terminalPageSize, terminalPerformance]
-  );
+  const postingRate = summary.totalSalesCount > 0
+    ? (summary.postedSalesCount / summary.totalSalesCount) * 100
+    : 0;
   const paginatedAttentionBatches = useMemo(
     () => paginateClientRows(attentionBatches, attentionPage, attentionPageSize),
     [attentionBatches, attentionPage, attentionPageSize]
   );
 
   useEffect(() => {
-    setBranchPage(1);
-    setTerminalPage(1);
     setAttentionPage(1);
-  }, [days, appliedRange.startDate, appliedRange.endDate, branchPageSize, terminalPageSize, attentionPageSize]);
+  }, [days, appliedRange.startDate, appliedRange.endDate, attentionPageSize]);
 
   return (
     <section className="page-section">
@@ -846,6 +1002,17 @@ function DashboardScreen({ token, onUnauthorized }) {
 
       <DataState loading={loading} error={error} empty={!data?.summary}>
         <>
+          <section className="executive-strip">
+            <div className="executive-copy">
+              <p className="eyebrow">Reconciliation health</p>
+              <h2>{postingRate >= 95 ? 'Operations are healthy' : postingRate >= 80 ? 'Posting is progressing' : 'Posting needs attention'}</h2>
+              <p>{formatNumber(summary.postedSalesCount)} of {formatNumber(summary.totalSalesCount)} sales have reached Sage in this reporting window.</p>
+            </div>
+            <ProgressRing value={postingRate} label="Posted" />
+            <div className="executive-stat"><span>Outstanding value</span><strong>{formatCurrency(Math.max(summary.totalSalesValue - (summary.totalSalesValue * postingRate / 100), 0))}</strong><small>Estimated from current posting ratio</small></div>
+            <div className="executive-stat"><span>Items requiring review</span><strong>{formatNumber(summary.pendingBatches + summary.failedBatches)}</strong><small>{formatNumber(summary.failedBatches)} failed batches</small></div>
+          </section>
+
           <section className="metric-grid">
             <MetricCard
               label="Sales Posted To Sage"
@@ -887,29 +1054,18 @@ function DashboardScreen({ token, onUnauthorized }) {
                 </div>
                 <p>Revenue, posted sales, and pending exposure per branch.</p>
               </div>
-              <div className="toolbar-row compact-toolbar">
-                <PageSizeField value={branchPageSize} onChange={setBranchPageSize} />
-              </div>
-              <PerformanceList rows={paginatedBranchPerformance.rows} valueKey="totalAmount" className="scroll-panel-list" />
-              <Pagination pagination={paginatedBranchPerformance.pagination} onPageChange={setBranchPage} />
+              <PaginatedBarChart rows={branchPerformance} type="branch" valueKey="totalAmount" valueFormatter={formatCurrency} emptyLabel="No branch revenue in this period" />
             </article>
 
             <article className="panel">
               <div className="panel-header">
                 <div>
-                  <p className="eyebrow">Document mix</p>
-                  <h2>Transaction volume</h2>
+                  <p className="eyebrow">Sales journey</p>
+                  <h2>Received vs posted</h2>
                 </div>
-                <p>Counts flowing through each Sage document stream.</p>
+                <p>A plain-language view of how POS sales progress into Sage.</p>
               </div>
-              <div className="document-grid">
-                {documentCards.map((card) => (
-                  <article key={card.key} className="document-card">
-                    <span>{titleizeDocumentType(card.key)}</span>
-                    <strong>{formatNumber(card.value)}</strong>
-                  </article>
-                ))}
-              </div>
+              <ReconciliationFlow summary={summary} />
             </article>
           </section>
 
@@ -922,11 +1078,7 @@ function DashboardScreen({ token, onUnauthorized }) {
                 </div>
                 <p>Terminal-level throughput and pending work.</p>
               </div>
-              <div className="toolbar-row compact-toolbar">
-                <PageSizeField value={terminalPageSize} onChange={setTerminalPageSize} />
-              </div>
-              <PerformanceList rows={paginatedTerminalPerformance.rows} valueKey="salesCount" className="scroll-panel-list" />
-              <Pagination pagination={paginatedTerminalPerformance.pagination} onPageChange={setTerminalPage} />
+              <PaginatedBarChart rows={terminalPerformance} type="terminal" valueKey="salesCount" emptyLabel="No terminal activity in this period" />
             </article>
 
             <article className="panel">
@@ -937,6 +1089,8 @@ function DashboardScreen({ token, onUnauthorized }) {
                 </div>
                 <p>Highest-priority items for reconciliation follow-up.</p>
               </div>
+              <AttentionBarChart rows={attentionBatches} />
+              {false && <>
               <div className="toolbar-row compact-toolbar">
                 <PageSizeField value={attentionPageSize} onChange={setAttentionPageSize} />
               </div>
@@ -962,6 +1116,7 @@ function DashboardScreen({ token, onUnauthorized }) {
                 )}
               </div>
               <Pagination pagination={paginatedAttentionBatches.pagination} onPageChange={setAttentionPage} />
+              </>}
             </article>
           </section>
 
