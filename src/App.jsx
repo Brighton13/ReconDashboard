@@ -603,19 +603,62 @@ function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconci
 }
 
 function LoginScreen({ onLogin, loading }) {
-  const [email, setEmail] = useState('admin@recon.local');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [mode, setMode] = useState('login');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  function showMode(nextMode) {
+    setMode(nextMode);
+    setError('');
+    setMessage('');
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     const result = await onLogin({ email, password });
-    if (result?.error) {
-      setError(result.error);
-      return;
-    }
-
+    if (result?.error) return setError(result.error);
     setError('');
+  }
+
+  async function requestResetCode(event) {
+    event?.preventDefault();
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await requestJson('/api/recon/auth/forgot-password', { method: 'POST', body: { email } });
+      setMessage(result.message);
+      setMode('reset');
+    } catch (requestError) {
+      setError(requestError.message || 'Could not send the reset code');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function resetPassword(event) {
+    event.preventDefault();
+    setError('');
+    if (newPassword !== confirmPassword) return setError('The new passwords do not match');
+    setSubmitting(true);
+    try {
+      const result = await requestJson('/api/recon/auth/reset-password', { method: 'POST', body: { email, otp, newPassword } });
+      setPassword('');
+      setOtp('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setMode('login');
+      setMessage(result.message);
+    } catch (requestError) {
+      setError(requestError.message || 'Could not reset the password');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -623,28 +666,42 @@ function LoginScreen({ onLogin, loading }) {
       <section className="login-panel login-brand-panel">
         <p className="eyebrow">Recon Dashboard</p>
         <h1>Finance visibility for every sale, batch, and Sage posting.</h1>
-        <p className="login-copy">
-          Track what has reached Sage, what is pending, and where branch or terminal-level reconciliation needs attention.
-        </p>
+        <p className="login-copy">Track what has reached Sage, what is pending, and where branch or terminal-level reconciliation needs attention.</p>
       </section>
-
       <section className="login-panel login-form-panel">
         <div>
-          <p className="eyebrow">Secure sign in</p>
-          <h2>Login to continue</h2>
-          <p className="login-copy">Credentials are now validated by Central Sync Server users, not browser-local demo state.</p>
+          <p className="eyebrow">Secure account access</p>
+          <h2>{mode === 'login' ? 'Login to continue' : mode === 'forgot' ? 'Forgot password' : 'Enter your reset code'}</h2>
+          <p className="login-copy">{mode === 'login' ? 'Sign in with your Central Sync Server account.' : mode === 'forgot' ? 'Enter your account email and we will send you a six-digit code.' : 'Use the code sent to your email and choose a new password.'}</p>
         </div>
 
-        <form className="login-form" onSubmit={handleSubmit}>
-          <FilterField label="Email address">
-            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
-          </FilterField>
-          <FilterField label="Password">
-            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required />
-          </FilterField>
+        {mode === 'login' ? <form className="login-form" onSubmit={handleSubmit}>
+          <FilterField label="Email address"><input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required /></FilterField>
+          <FilterField label="Password"><input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required /></FilterField>
+          {message ? <div className="inline-note">{message}</div> : null}
           {error ? <div className="inline-error">{error}</div> : null}
           <button type="submit" className="primary-button" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
-        </form>
+          <button type="button" className="text-button" onClick={() => showMode('forgot')}>Forgot your password?</button>
+        </form> : null}
+
+        {mode === 'forgot' ? <form className="login-form" onSubmit={requestResetCode}>
+          <FilterField label="Email address"><input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required /></FilterField>
+          {error ? <div className="inline-error">{error}</div> : null}
+          <button type="submit" className="primary-button" disabled={submitting}>{submitting ? 'Sending code...' : 'Send reset code'}</button>
+          <button type="button" className="text-button" onClick={() => showMode('login')}>Back to sign in</button>
+        </form> : null}
+
+        {mode === 'reset' ? <form className="login-form" onSubmit={resetPassword}>
+          <FilterField label="Email address"><input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></FilterField>
+          <FilterField label="Six-digit code"><input value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" required /></FilterField>
+          <FilterField label="New password"><input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type="password" minLength="8" autoComplete="new-password" required /></FilterField>
+          <FilterField label="Confirm new password"><input value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type="password" minLength="8" autoComplete="new-password" required /></FilterField>
+          {message ? <div className="inline-note">{message}</div> : null}
+          {error ? <div className="inline-error">{error}</div> : null}
+          <button type="submit" className="primary-button" disabled={submitting}>{submitting ? 'Resetting password...' : 'Reset password'}</button>
+          <button type="button" className="text-button" onClick={requestResetCode} disabled={submitting}>Send another code</button>
+          <button type="button" className="text-button" onClick={() => showMode('login')}>Back to sign in</button>
+        </form> : null}
       </section>
     </div>
   );
@@ -2540,9 +2597,64 @@ function ReleaseManagementScreen({ token, currentUser, onUnauthorized }) {
   );
 }
 
-function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children }) {
+function ChangePasswordDialog({ token, onClose, onUnauthorized }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    if (newPassword !== confirmPassword) return setError('The new passwords do not match');
+    setSubmitting(true);
+    try {
+      const result = await requestJson('/api/recon/auth/change-password', {
+        method: 'POST', token, body: { currentPassword, newPassword },
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setMessage(result.message);
+    } catch (requestError) {
+      if (requestError.status === 401 && requestError.message !== 'Current password is incorrect') {
+        onUnauthorized();
+        return;
+      }
+      setError(requestError.message || 'Could not change the password');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="dialog-panel password-dialog" role="dialog" aria-modal="true" aria-labelledby="change-password-title">
+        <div className="panel-header">
+          <div><p className="eyebrow">Account security</p><h2 id="change-password-title">Change password</h2></div>
+          <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+        </div>
+        <form className="user-form" onSubmit={handleSubmit}>
+          <FilterField label="Current password"><input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required /></FilterField>
+          <FilterField label="New password"><input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength="8" autoComplete="new-password" required /></FilterField>
+          <FilterField label="Confirm new password"><input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength="8" autoComplete="new-password" required /></FilterField>
+          <p className="form-hint">Use at least 8 characters.</p>
+          {message ? <div className="inline-note">{message}</div> : null}
+          {error ? <div className="inline-error">{error}</div> : null}
+          <button type="submit" className="primary-button" disabled={submitting}>{submitting ? 'Changing password...' : 'Change password'}</button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, onUnauthorized, token, children }) {
   const currentMenu = MENU_ITEMS.find((item) => item.key === activeMenu);
   const [openGroups, setOpenGroups] = useState(() => ({ [getGroupKeyForMenu(activeMenu)]: true }));
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     const groupKey = getGroupKeyForMenu(activeMenu);
@@ -2596,6 +2708,7 @@ function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children })
         <div className="sidebar-footer">
           <strong>{currentUser.fullName}</strong>
           <span>{currentUser.email}</span>
+          <button type="button" className="secondary-button" onClick={() => setChangingPassword(true)}>Change password</button>
           <button type="button" className="secondary-button" onClick={onLogout}>Logout</button>
         </div>
       </aside>
@@ -2613,6 +2726,7 @@ function AppShell({ activeMenu, onMenuChange, currentUser, onLogout, children })
         </header>
         {children}
       </main>
+      {changingPassword ? <ChangePasswordDialog token={token} onClose={() => setChangingPassword(false)} onUnauthorized={onUnauthorized} /> : null}
     </div>
   );
 }
@@ -2757,6 +2871,8 @@ function App() {
       onMenuChange={handleMenuChange}
       currentUser={session.user}
       onLogout={handleLogout}
+      onUnauthorized={handleUnauthorized}
+      token={session.token}
     >
       {renderActivePage()}
     </AppShell>
