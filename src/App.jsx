@@ -847,6 +847,11 @@ function ReconciliationFlow({ summary }) {
   const pending = Number(summary.pendingSalesCount || 0);
   const postedWidth = total ? (posted / total) * 100 : 0;
   const pendingWidth = total ? (pending / total) * 100 : 0;
+  const creditNotes = Number(summary.totalCreditNotesCount || 0);
+  const postedCreditNotes = Number(summary.postedCreditNotesCount || 0);
+  const pendingCreditNotes = Number(summary.pendingCreditNotesCount || 0);
+  const creditPostedWidth = creditNotes ? (postedCreditNotes / creditNotes) * 100 : 0;
+  const creditPendingWidth = creditNotes ? (pendingCreditNotes / creditNotes) * 100 : 0;
 
   return (
     <div className="reconciliation-flow">
@@ -863,9 +868,13 @@ function ReconciliationFlow({ summary }) {
         <div><i className="flow-dot posted" /><span>Posted to Sage</span><strong>{formatNumber(posted)}</strong><small>{total ? `${postedWidth.toFixed(1)}% of received sales` : 'No sales received'}</small></div>
         <div><i className="flow-dot pending" /><span>Still pending</span><strong>{formatNumber(pending)}</strong><small>{total ? `${pendingWidth.toFixed(1)}% of received sales` : 'No sales received'}</small></div>
       </div>
-      <div className="credit-note-summary">
-        <div><span>Credit notes received</span><strong>{formatNumber(summary.totalCreditNotesCount)}</strong></div>
-        <div><span>Returned value</span><strong>{formatCurrency(summary.totalCreditNotesValue)}</strong></div>
+      <div className="credit-note-flow">
+        <div className="credit-note-heading"><div><span>Credit notes received</span><strong>{formatNumber(creditNotes)}</strong></div><div><span>Returned value</span><strong>{formatCurrency(summary.totalCreditNotesValue)}</strong></div></div>
+        <div className="flow-bar" aria-label={`${postedCreditNotes} credit notes posted and ${pendingCreditNotes} pending`}><div className="flow-posted" style={{ width: `${creditPostedWidth}%` }} /><div className="flow-pending" style={{ width: `${creditPendingWidth}%` }} /></div>
+        <div className="flow-breakdown">
+          <div><i className="flow-dot posted" /><span>Posted to Sage</span><strong>{formatNumber(postedCreditNotes)}</strong><small>{creditNotes ? `${creditPostedWidth.toFixed(1)}% of received credit notes` : 'No credit notes received'}</small></div>
+          <div><i className="flow-dot pending" /><span>Still pending</span><strong>{formatNumber(pendingCreditNotes)}</strong><small>{creditNotes ? `${creditPendingWidth.toFixed(1)}% of received credit notes` : 'No credit notes received'}</small></div>
+        </div>
       </div>
       <p className="flow-explainer">Received, posted, and pending are stages of the same sales flow—not separate document types.</p>
     </div>
@@ -918,6 +927,8 @@ function DashboardScreen({ token, onUnauthorized }) {
     failedBatches: 0,
     totalSalesValue: 0,
     totalCreditNotesCount: 0,
+    postedCreditNotesCount: 0,
+    pendingCreditNotesCount: 0,
     totalCreditNotesValue: 0,
     documentSummary: {},
   };
