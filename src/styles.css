@@ -787,6 +787,35 @@
     @apply md:grid-cols-3;
   }
 
+  .till-admin-panel {
+    @apply grid gap-4;
+  }
+
+  .till-admin-form {
+    @apply grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto] md:items-end;
+  }
+
+  .till-admin-form label {
+    @apply grid gap-1.5;
+  }
+
+  .till-admin-form label span {
+    @apply text-xs font-bold uppercase tracking-[0.16em] text-slate-500;
+  }
+
+  .success-message,
+  .error-message {
+    @apply m-0 rounded-2xl px-4 py-3 text-sm font-semibold;
+  }
+
+  .success-message {
+    @apply border border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .error-message {
+    @apply border border-rose-200 bg-rose-50 text-rose-700;
+  }
+
   .sync-legend {
     @apply flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-600 md:justify-end;
   }
@@ -858,6 +887,10 @@
 
   .terminal-status-card small {
     @apply mt-3 block text-xs font-medium leading-5 opacity-70;
+  }
+
+  .terminal-card-action {
+    @apply mt-3 justify-self-start px-0 py-1 text-xs text-current opacity-80 hover:opacity-100;
   }
 
   .content-grid.two-columns {

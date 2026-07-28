@@ -1225,8 +1225,12 @@ function DashboardScreen({ token, onUnauthorized }) {
   );
 }
 
-function TerminalVisibilityScreen({ token, onUnauthorized }) {
+function TerminalVisibilityScreen({ token, onUnauthorized, currentUser }) {
   const [refreshTick, setRefreshTick] = useState(0);
+  const [form, setForm] = useState({ branchId: '', terminalId: '', terminalName: '', storeId: '' });
+  const [saving, setSaving] = useState(false);
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionError, setActionError] = useState('');
   const { data, loading, error } = useReconApi(
     '/api/recon/terminal-sync-status',
     { refresh: refreshTick },
@@ -1236,6 +1240,7 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
   );
   const terminals = data?.terminals || [];
   const summary = data?.summary || { totalTerminals: 0, syncedCount: 0, missingCount: 0 };
+  const canManageTills = currentUser?.role === 'admin';
 
   useEffect(() => {
     const refreshTimer = window.setInterval(() => setRefreshTick((current) => current + 1), 10 * 60_000);
@@ -1244,6 +1249,61 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
 
   function refreshNow() {
     setRefreshTick((current) => current + 1);
+  }
+
+  function updateForm(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function saveTill(event) {
+    event.preventDefault();
+    setSaving(true);
+    setActionError('');
+    setActionMessage('');
+
+    try {
+      await requestJson('/api/recon/known-tills', {
+        method: 'POST',
+        token,
+        body: {
+          branchId: form.branchId,
+          terminalId: form.terminalId,
+          terminalName: form.terminalName,
+          storeId: form.storeId,
+          active: true,
+        },
+      });
+      setForm({ branchId: '', terminalId: '', terminalName: '', storeId: '' });
+      setActionMessage('Till saved.');
+      refreshNow();
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setActionError(requestError.message || 'Failed to save till.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deactivateTill(terminal) {
+    setActionError('');
+    setActionMessage('');
+
+    try {
+      await requestJson(`/api/recon/known-tills/${terminal.id}`, {
+        method: 'PATCH',
+        token,
+        body: { active: false },
+      });
+      setActionMessage('Till deactivated.');
+      refreshNow();
+    } catch (requestError) {
+      if (requestError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+      setActionError(requestError.message || 'Failed to update till.');
+    }
   }
 
   return (
@@ -1263,6 +1323,41 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
           <small>Updates automatically every 10 minutes</small>
         </div>
       </div>
+
+      {canManageTills ? (
+        <section className="panel till-admin-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Known till register</p>
+              <h2>Add or update a till</h2>
+            </div>
+            <p>Manual entries appear in the daily report even before they send data.</p>
+          </div>
+          <form className="till-admin-form" onSubmit={saveTill}>
+            <label>
+              <span>Branch ID</span>
+              <input value={form.branchId} onChange={(event) => updateForm('branchId', event.target.value)} required />
+            </label>
+            <label>
+              <span>Terminal ID</span>
+              <input value={form.terminalId} onChange={(event) => updateForm('terminalId', event.target.value)} required />
+            </label>
+            <label>
+              <span>Name</span>
+              <input value={form.terminalName} onChange={(event) => updateForm('terminalName', event.target.value)} placeholder="Till 01" />
+            </label>
+            <label>
+              <span>Store ID</span>
+              <input value={form.storeId} onChange={(event) => updateForm('storeId', event.target.value)} inputMode="numeric" />
+            </label>
+            <button type="submit" className="primary-button" disabled={saving}>
+              {saving ? 'Saving...' : 'Save till'}
+            </button>
+          </form>
+          {actionMessage ? <p className="success-message">{actionMessage}</p> : null}
+          {actionError ? <p className="error-message">{actionError}</p> : null}
+        </section>
+      ) : null}
 
       <DataState loading={loading} error={error} empty={terminals.length === 0}>
         <>
@@ -1300,6 +1395,15 @@ function TerminalVisibilityScreen({ token, onUnauthorized }) {
                       ? `Last received ${formatDateTime(terminal.lastReceivedAt)}`
                       : 'No data received yet'}
                 </small>
+                {canManageTills ? (
+                  <button
+                    type="button"
+                    className="text-button terminal-card-action"
+                    onClick={() => deactivateTill(terminal)}
+                  >
+                    Deactivate
+                  </button>
+                ) : null}
               </article>
             ))}
           </div>
@@ -3008,7 +3112,7 @@ function App() {
       case 'credit-notes':
         return <CreditNotesScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'terminal-visibility':
-        return <TerminalVisibilityScreen token={session.token} onUnauthorized={handleUnauthorized} />;
+        return <TerminalVisibilityScreen token={session.token} onUnauthorized={handleUnauthorized} currentUser={session.user} />;
       case 'zra-compliance':
         return <ZraComplianceScreen token={session.token} onUnauthorized={handleUnauthorized} />;
       case 'attention-queue':
