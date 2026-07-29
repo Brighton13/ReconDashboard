@@ -139,6 +139,23 @@ function statusTone(statusBucket) {
   return 'tone-amber';
 }
 
+function formatFailureReason(row) {
+  const reason = String(row?.failureReason || row?.lastError || '').trim();
+  if (reason) {
+    return reason;
+  }
+
+  if (row?.statusBucket === 'failed') {
+    return 'No failure reason was recorded. Try posting again to capture the current Sage response.';
+  }
+
+  if (row?.statusBucket === 'pending') {
+    return 'Waiting for the Sage worker to post this batch.';
+  }
+
+  return 'No issue recorded.';
+}
+
 function complianceBucket(rate) {
   if (rate >= 95) {
     return 'completed';
@@ -2268,9 +2285,14 @@ function RepostPendingPanel({ token, onUnauthorized }) {
 
 function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, currentUser }) {
   const [filters, setFilters] = useState(() => createBatchFilters(eventType));
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [postingIds, setPostingIds] = useState([]);
   const { data, loading, error } = useReconApi('/api/recon/batches', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
   const filterMeta = data?.filters || {};
+  const isDayEndBatch = eventType === 'day_end.ready';
+  const canPostBatches = isDayEndBatch && currentUser?.role === 'admin';
 
   useEffect(() => {
     setFilters(createBatchFilters(eventType));
@@ -2284,6 +2306,44 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
     }));
   }
 
+  function refreshRows() {
+    setFilters((current) => ({
+      ...current,
+      refreshKey: Date.now(),
+    }));
+  }
+
+  async function tryPostBatch(row) {
+    if (!canPostBatches) {
+      setActionError('Only admin users may post day-end batches to Sage.');
+      return;
+    }
+
+    setActionMessage('');
+    setActionError('');
+    setPostingIds((current) => [...current, row.id]);
+
+    try {
+      const result = await requestJson(`/api/recon/batches/${row.id}/reconcile`, {
+        method: 'POST',
+        token,
+        body: { repost: true },
+      });
+
+      setActionMessage(result.message || `Batch ${row.id} posted to Sage.`);
+      refreshRows();
+    } catch (postError) {
+      if (postError.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+
+      setActionError(postError.message || `Failed to post batch ${row.id} to Sage.`);
+      refreshRows();
+    } finally {
+      setPostingIds((current) => current.filter((id) => id !== row.id));
+    }
+  }
+
   return (
     <section className="page-section">
       <div className="page-hero compact-hero">
@@ -2294,7 +2354,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
         </div>
       </div>
 
-      {eventType === 'day_end.ready' && currentUser?.role === 'admin' && (
+      {canPostBatches && (
         <RepostPendingPanel token={token} onUnauthorized={onUnauthorized} />
       )}
 
@@ -2345,6 +2405,8 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
             </div>
             <p>{formatNumber(data?.pagination?.total || 0)} batches found.</p>
           </div>
+          {actionMessage && <div className="message success-message">{actionMessage}</div>}
+          {actionError && <div className="message error-message">{actionError}</div>}
           <div className="table-wrap scroll-panel-table">
             <table className="data-table">
               <thead>
@@ -2357,8 +2419,10 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                   <th>Value</th>
                   <th>Exported</th>
                   <th>Retries</th>
+                  <th>Why failed / status note</th>
                   <th>Business date</th>
                   <th>Received</th>
+                  {canPostBatches && <th>Action</th>}
                 </tr>
               </thead>
               <tbody>
@@ -2375,8 +2439,27 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                     <td>{formatCurrency(row.totalAmount)}</td>
                     <td>{formatNumber(row.exportedCount)}</td>
                     <td>{formatNumber(row.retryCount)}</td>
+                    <td>
+                      <div className="table-subtitle">{formatFailureReason(row)}</div>
+                    </td>
                     <td>{formatShortDate(row.batchDate)}</td>
                     <td>{formatDateTime(row.receivedAt)}</td>
+                    {canPostBatches && (
+                      <td>
+                        {row.statusBucket === 'completed' ? (
+                          <span className="table-subtitle">Posted</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => tryPostBatch(row)}
+                            disabled={postingIds.includes(row.id)}
+                          >
+                            {postingIds.includes(row.id) ? 'Posting...' : 'Try post'}
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
