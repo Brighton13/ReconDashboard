@@ -1532,7 +1532,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
   const [actionError, setActionError] = useState('');
   const { data, loading, error } = useReconApi(
     '/api/recon/summary',
-    { days, limit: 20, refreshKey },
+    { days, limit: 100, refreshKey },
     token,
     true,
     onUnauthorized
