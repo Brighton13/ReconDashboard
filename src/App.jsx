@@ -372,7 +372,8 @@ function MetricCard({ label, value, meta, accent }) {
 }
 
 function StatusPill({ status, bucket }) {
-  return <span className={`status-pill ${statusTone(bucket)}`}>{status}</span>;
+  const label = status === 'missing_oe_order' ? 'Missing OE Order' : status;
+  return <span className={`status-pill ${statusTone(bucket)}`}>{label}</span>;
 }
 
 function PerformanceList({ rows, valueKey, className = '' }) {
@@ -896,6 +897,7 @@ function DashboardScreen({ token, onUnauthorized }) {
     totalBatches: 0,
     pendingSalesCount: 0,
     pendingBatches: 0,
+    missingOeBatches: 0,
     failedBatches: 0,
     totalSalesValue: 0,
     totalCreditNotesCount: 0,
@@ -993,7 +995,7 @@ function DashboardScreen({ token, onUnauthorized }) {
             </div>
             <ProgressRing value={postingRate} label="Posted" />
             <div className="executive-stat"><span>Outstanding value</span><strong>{formatCurrency(Math.max(summary.totalSalesValue - (summary.totalSalesValue * postingRate / 100), 0))}</strong><small>Estimated from current posting ratio</small></div>
-            <div className="executive-stat"><span>Items requiring review</span><strong>{formatNumber(summary.pendingBatches + summary.failedBatches)}</strong><small>{formatNumber(summary.failedBatches)} failed batches</small></div>
+            <div className="executive-stat"><span>Items requiring review</span><strong>{formatNumber(summary.pendingBatches + summary.failedBatches + summary.missingOeBatches)}</strong><small>{formatNumber(summary.failedBatches)} failed, {formatNumber(summary.missingOeBatches)} missing OE</small></div>
           </section>
 
           <section className="metric-grid">
@@ -1006,7 +1008,7 @@ function DashboardScreen({ token, onUnauthorized }) {
             <MetricCard
               label="Pending Sales"
               value={formatNumber(summary.pendingSalesCount)}
-              meta={`${formatNumber(summary.pendingBatches)} batches still in flight`}
+              meta={`${formatNumber(summary.pendingBatches)} in flight, ${formatNumber(summary.missingOeBatches)} missing OE`}
               accent="accent-amber"
             />
             <MetricCard
@@ -1574,7 +1576,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
     }
   }
 
-  async function postPendingSalesBatch(batchId) {
+  async function postPendingSalesBatch(batch) {
     if (!currentUser?.role || currentUser.role !== 'admin') {
       setActionError('Only admin users may post pending sales to Sage.');
       return;
@@ -1582,13 +1584,17 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
 
     setActionMessage('');
     setActionError('');
+    const batchId = batch.id;
     setPendingReconcileIds((current) => [...current, batchId]);
 
     try {
-      const result = await requestJson(`/api/recon/batches/${batchId}/reconcile`, {
+      const result = await requestJson(`/api/recon/batches/${batchId}/post-missing-oe`, {
         method: 'POST',
         token,
-        body: { repost: true },
+        body: {
+          expectedPendingSalesCount: Number(batch.pendingSalesCount || 0),
+          expectedIdempotencyKey: batch.idempotencyKey || '',
+        },
       });
       if (result?.success) {
         setActionMessage(result.message || `Pending sales for batch ${batchId} posted to Sage.`);
@@ -1717,7 +1723,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={() => postPendingSalesBatch(batch.id)}
+                      onClick={() => postPendingSalesBatch(batch)}
                       disabled={pendingReconcileIds.includes(batch.id)}
                     >
                       {pendingReconcileIds.includes(batch.id) ? 'Posting...' : 'Post pending sales'}
@@ -2229,10 +2235,13 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
     setPostingIds((current) => [...current, row.id]);
 
     try {
-      const result = await requestJson(`/api/recon/batches/${row.id}/reconcile`, {
+      const result = await requestJson(`/api/recon/batches/${row.id}/post-missing-oe`, {
         method: 'POST',
         token,
-        body: { repost: true },
+        body: {
+          expectedPendingSalesCount: Number(row.pendingSalesCount || 0),
+          expectedIdempotencyKey: row.idempotencyKey || '',
+        },
       });
 
       setActionMessage(result.message || `Pending sales for batch ${row.id} posted to Sage.`);
