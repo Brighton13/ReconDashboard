@@ -12,6 +12,7 @@ const DASHBOARD_PRESETS = [
   { value: 60, label: 'Last 60 days' },
 ];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const DAY_END_EVENT_TYPE = 'day_end.ready';
 const MENU_GROUPS = [
   {
     key: 'overview',
@@ -475,14 +476,10 @@ function PageSizeField({ value, onChange }) {
   );
 }
 
-function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconcile }) {
-  const [manualOrderNumber, setManualOrderNumber] = useState('');
-
+function SaleDetailsDialog({ sale, onClose }) {
   if (!sale) {
     return null;
   }
-
-  const showReconcile = canReconcile && !sale.postedToSage;
 
   return (
     <div className="dialog-backdrop" onClick={onClose}>
@@ -499,16 +496,6 @@ function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconci
             <h2 id="sale-details-title">Sale #{sale.saleId}</h2>
           </div>
           <div className="dialog-header-actions">
-            {showReconcile && (
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => onReconcile(sale)}
-                disabled={reconciling}
-              >
-                {reconciling ? 'Reconciling...' : 'Reconcile with Sage'}
-              </button>
-            )}
             <button type="button" className="secondary-button" onClick={onClose}>Close</button>
           </div>
         </div>
@@ -520,42 +507,6 @@ function SaleDetailsDialog({ sale, onClose, onReconcile, reconciling, canReconci
           </div>
           <p>{sale.pendingReason || 'No additional detail is available for this sale.'}</p>
         </article>
-
-        {showReconcile && (
-          <article className="detail-reason-card sale-correction-card">
-            <strong>Correct this sale</strong>
-            <p>
-              If the day-end batch never posted, re-post it to create the Sage order. If the order already
-              exists in Sage under a different reference, enter its OE order number to link it.
-            </p>
-            <div className="correction-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => onReconcile(sale, { repost: true })}
-                disabled={reconciling}
-              >
-                {reconciling ? 'Working...' : 'Re-post batch to Sage'}
-              </button>
-            </div>
-            <div className="correction-link-row">
-              <input
-                type="text"
-                placeholder="Sage OE order number (e.g. ORD0000000000000020667)"
-                value={manualOrderNumber}
-                onChange={(event) => setManualOrderNumber(event.target.value)}
-              />
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => onReconcile(sale, { sageOrderNumber: manualOrderNumber.trim() })}
-                disabled={reconciling || manualOrderNumber.trim().length === 0}
-              >
-                Link order
-              </button>
-            </div>
-          </article>
-        )}
 
         <div className="detail-grid">
           <article className="detail-card">
@@ -722,6 +673,10 @@ function LoginScreen({ onLogin, loading }) {
       </section>
     </div>
   );
+}
+
+function canPostPendingSalesBatch(row) {
+  return row?.eventType === DAY_END_EVENT_TYPE && Number(row.pendingSalesCount || 0) > 0;
 }
 
 function PaginatedBarChart({ rows, valueKey, valueFormatter = formatNumber, emptyLabel = 'No chart data available', type }) {
@@ -1583,7 +1538,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
     onUnauthorized
   );
   const attentionBatches = useMemo(
-    () => (data?.recentBatches || []).filter((row) => row.statusBucket !== 'completed'),
+    () => (data?.recentBatches || []).filter((row) => row.statusBucket !== 'completed' || canPostPendingSalesBatch(row)),
     [data]
   );
   const paginatedRows = useMemo(
@@ -1619,9 +1574,9 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
     }
   }
 
-  async function reconcileBatch(batchId) {
+  async function postPendingSalesBatch(batchId) {
     if (!currentUser?.role || currentUser.role !== 'admin') {
-      setActionError('Only admin users may reconcile batches with Sage.');
+      setActionError('Only admin users may post pending sales to Sage.');
       return;
     }
 
@@ -1633,15 +1588,16 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
       const result = await requestJson(`/api/recon/batches/${batchId}/reconcile`, {
         method: 'POST',
         token,
+        body: { repost: true },
       });
       if (result?.success) {
-        setActionMessage(result.message || `Batch ${batchId} reconciled with Sage.`);
+        setActionMessage(result.message || `Pending sales for batch ${batchId} posted to Sage.`);
         setRefreshKey((current) => current + 1);
       } else {
-        setActionError(result?.message || `No matching Sage order found for batch ${batchId}.`);
+        setActionError(result?.message || `Pending sales for batch ${batchId} could not be posted to Sage.`);
       }
     } catch (reconcileError) {
-      setActionError(reconcileError.message || 'Failed to reconcile batch with Sage.');
+      setActionError(reconcileError.message || 'Failed to post pending sales to Sage.');
     } finally {
       setPendingReconcileIds((current) => current.filter((id) => id !== batchId));
     }
@@ -1735,6 +1691,9 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                   <p>
                     Branch {batch.branchId} • Terminal {batch.terminalId} • {formatNumber(batch.transactionCount)} transactions
                   </p>
+                  {canPostPendingSalesBatch(batch) && (
+                    <p className="table-subtitle">{formatNumber(batch.pendingSalesCount)} sales pending Sage posting</p>
+                  )}
                   {batch.lastError && (
                     <p className="attention-error">{batch.lastError}</p>
                   )}
@@ -1752,14 +1711,14 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                       {pendingRequeueIds.includes(batch.id) ? 'Retrying…' : 'Retry'}
                     </button>
                   )}
-                  {currentUser?.role === 'admin' && batch.eventType === 'day_end.ready' && (
+                  {currentUser?.role === 'admin' && canPostPendingSalesBatch(batch) && (
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={() => reconcileBatch(batch.id)}
+                      onClick={() => postPendingSalesBatch(batch.id)}
                       disabled={pendingReconcileIds.includes(batch.id)}
                     >
-                      {pendingReconcileIds.includes(batch.id) ? 'Reconciling…' : 'Reconcile with Sage'}
+                      {pendingReconcileIds.includes(batch.id) ? 'Posting...' : 'Post pending sales'}
                     </button>
                   )}
                 </div>
@@ -1773,7 +1732,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
   );
 }
 
-function SalesScreen({ token, onUnauthorized, currentUser }) {
+function SalesScreen({ token, onUnauthorized }) {
   const [filters, setFilters] = useState({
     branchId: '',
     terminalId: '',
@@ -1784,15 +1743,11 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
     refreshKey: 0,
   });
   const [selectedSale, setSelectedSale] = useState(null);
-  const [reconcilingIds, setReconcilingIds] = useState([]);
-  const [actionMessage, setActionMessage] = useState('');
-  const [actionError, setActionError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
   const { data, loading, error } = useReconApi('/api/recon/sales', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
   const filterMeta = data?.filters || {};
-  const isAdmin = currentUser?.role === 'admin';
 
   function updateFilter(key, value) {
     setFilters((current) => ({
@@ -1823,40 +1778,6 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
       setExportError(downloadError.message || 'Failed to download the sales report.');
     } finally {
       setExporting(false);
-    }
-  }
-
-  async function reconcileSale(sale, options = {}) {
-    if (!isAdmin) {
-      setActionError('Only admin users may reconcile sales with Sage.');
-      return;
-    }
-
-    setActionMessage('');
-    setActionError('');
-    setReconcilingIds((current) => [...current, sale.id]);
-
-    try {
-      const result = await requestJson(`/api/recon/batches/${sale.syncEventId}/reconcile`, {
-        method: 'POST',
-        token,
-        body: options,
-      });
-
-      if (result?.found === false || result?.success === false) {
-        setActionError(result?.message || `No Sage reference found for sale #${sale.saleId}.`);
-      } else {
-        setActionMessage(result?.message || `Sale #${sale.saleId} reconciled with Sage.`);
-        setSelectedSale(null);
-        setFilters((current) => ({ ...current, refreshKey: (current.refreshKey || 0) + 1 }));
-      }
-    } catch (reconcileError) {
-      if (reconcileError.status === 401 && onUnauthorized) {
-        onUnauthorized();
-      }
-      setActionError(reconcileError.message || 'Failed to reconcile with Sage.');
-    } finally {
-      setReconcilingIds((current) => current.filter((id) => id !== sale.id));
     }
   }
 
@@ -1919,11 +1840,6 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
             </div>
             <p>{formatNumber(data?.pagination?.total || 0)} sales matching the selected filters.</p>
           </div>
-          {(actionMessage || actionError) && (
-            <p className={actionError ? 'action-feedback error' : 'action-feedback success'}>
-              {actionError || actionMessage}
-            </p>
-          )}
           <div className="table-wrap scroll-panel-table">
             <table className="data-table">
               <thead>
@@ -1961,16 +1877,6 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
                         <button type="button" className="secondary-button details-button" onClick={() => setSelectedSale(row)}>
                           View details
                         </button>
-                        {!row.postedToSage && isAdmin && (
-                          <button
-                            type="button"
-                            className="primary-button details-button"
-                            onClick={() => reconcileSale(row)}
-                            disabled={reconcilingIds.includes(row.id)}
-                          >
-                            {reconcilingIds.includes(row.id) ? 'Reconciling...' : 'Reconcile with Sage'}
-                          </button>
-                        )}
                       </div>
                     </td>
                   </tr>
@@ -1984,9 +1890,6 @@ function SalesScreen({ token, onUnauthorized, currentUser }) {
       <SaleDetailsDialog
         sale={selectedSale}
         onClose={() => setSelectedSale(null)}
-        onReconcile={reconcileSale}
-        reconciling={selectedSale ? reconcilingIds.includes(selectedSale.id) : false}
-        canReconcile={isAdmin}
       />
     </section>
   );
@@ -2291,7 +2194,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
   const { data, loading, error } = useReconApi('/api/recon/batches', filters, token, true, onUnauthorized);
   const rows = data?.rows || [];
   const filterMeta = data?.filters || {};
-  const isDayEndBatch = eventType === 'day_end.ready';
+  const isDayEndBatch = eventType === DAY_END_EVENT_TYPE;
   const canPostBatches = isDayEndBatch && currentUser?.role === 'admin';
 
   useEffect(() => {
@@ -2314,8 +2217,8 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
   }
 
   async function tryPostBatch(row) {
-    if (!canPostBatches) {
-      setActionError('Only admin users may post day-end batches to Sage.');
+    if (!canPostBatches || !canPostPendingSalesBatch(row)) {
+      setActionError('Only day-end batches with pending sales can be posted to Sage from here.');
       return;
     }
 
@@ -2330,14 +2233,14 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
         body: { repost: true },
       });
 
-      setActionMessage(result.message || `Batch ${row.id} posted to Sage.`);
+      setActionMessage(result.message || `Pending sales for batch ${row.id} posted to Sage.`);
       refreshRows();
     } catch (postError) {
       if (postError.status === 401 && onUnauthorized) {
         onUnauthorized();
       }
 
-      setActionError(postError.message || `Failed to post batch ${row.id} to Sage.`);
+      setActionError(postError.message || `Failed to post pending sales for batch ${row.id} to Sage.`);
       refreshRows();
     } finally {
       setPostingIds((current) => current.filter((id) => id !== row.id));
@@ -2416,6 +2319,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                   <th>Branch</th>
                   <th>Terminal</th>
                   <th>Transactions</th>
+                  <th>Pending Sales</th>
                   <th>Value</th>
                   <th>Exported</th>
                   <th>Retries</th>
@@ -2436,6 +2340,7 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                     <td>{row.branchId}</td>
                     <td>{row.terminalId}</td>
                     <td>{formatNumber(row.transactionCount)}</td>
+                    <td>{formatNumber(row.pendingSalesCount)}</td>
                     <td>{formatCurrency(row.totalAmount)}</td>
                     <td>{formatNumber(row.exportedCount)}</td>
                     <td>{formatNumber(row.retryCount)}</td>
@@ -2446,17 +2351,17 @@ function BatchesScreen({ title, eventType, eyebrow, token, onUnauthorized, curre
                     <td>{formatDateTime(row.receivedAt)}</td>
                     {canPostBatches && (
                       <td>
-                        {row.statusBucket === 'completed' ? (
-                          <span className="table-subtitle">Posted</span>
-                        ) : (
+                        {canPostPendingSalesBatch(row) ? (
                           <button
                             type="button"
                             className="secondary-button"
                             onClick={() => tryPostBatch(row)}
                             disabled={postingIds.includes(row.id)}
                           >
-                            {postingIds.includes(row.id) ? 'Posting...' : 'Try post'}
+                            {postingIds.includes(row.id) ? 'Posting...' : 'Post pending sales'}
                           </button>
+                        ) : (
+                          <span className="table-subtitle">Posted</span>
                         )}
                       </td>
                     )}
