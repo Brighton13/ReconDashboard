@@ -141,7 +141,7 @@ function statusTone(statusBucket) {
 }
 
 function formatFailureReason(row) {
-  const reason = String(row?.failureReason || row?.lastError || '').trim();
+  const reason = String(row?.attentionReason || row?.failureReason || row?.lastError || '').trim();
   if (reason) {
     return reason;
   }
@@ -676,7 +676,7 @@ function LoginScreen({ onLogin, loading }) {
 }
 
 function canPostPendingSalesBatch(row) {
-  return row?.eventType === DAY_END_EVENT_TYPE && Number(row.pendingSalesCount || 0) > 0;
+  return row?.eventType === DAY_END_EVENT_TYPE && (row.missingOeOrder || Number(row.pendingSalesCount || 0) > 0);
 }
 
 function PaginatedBarChart({ rows, valueKey, valueFormatter = formatNumber, emptyLabel = 'No chart data available', type }) {
@@ -1641,8 +1641,8 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
       <div className="page-hero compact-hero">
         <div>
           <p className="eyebrow">Attention queue</p>
-          <h1>Pending and failed batches</h1>
-          <p className="page-copy">Focus finance follow-up on batches that are still pending or have failed during synchronization.</p>
+          <h1>Pending, failed, and missing OE batches</h1>
+          <p className="page-copy">Focus finance follow-up on batches that are still pending, have failed, or completed locally without a Sage OE order.</p>
         </div>
         <div className="toolbar-row compact-toolbar">
           {DAY_FILTERS.map((value) => (
@@ -1692,7 +1692,9 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                     Branch {batch.branchId} • Terminal {batch.terminalId} • {formatNumber(batch.transactionCount)} transactions
                   </p>
                   {canPostPendingSalesBatch(batch) && (
-                    <p className="table-subtitle">{formatNumber(batch.pendingSalesCount)} sales pending Sage posting</p>
+                    <p className="table-subtitle">
+                      {batch.attentionReason || 'Completed locally but missing Sage OE order'} - {formatNumber(batch.pendingSalesCount)} sales pending Sage posting
+                    </p>
                   )}
                   {batch.lastError && (
                     <p className="attention-error">{batch.lastError}</p>
@@ -1701,7 +1703,7 @@ function AttentionQueueScreen({ token, onUnauthorized, currentUser }) {
                 <div className="attention-meta">
                   <strong>{formatCurrency(batch.totalAmount)}</strong>
                   <span>{formatDateTime(batch.receivedAt)}</span>
-                  {currentUser?.role === 'admin' && (
+                  {currentUser?.role === 'admin' && batch.statusBucket !== 'completed' && (
                     <button
                       type="button"
                       className="secondary-button"
